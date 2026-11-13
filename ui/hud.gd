@@ -15,6 +15,8 @@ class Tile extends Control:
 	var fill := Color(0.13, 0.14, 0.18)
 	var cover := 0.0                       # 0..1 of the tile darkened (cooldown left)
 	var big := ""                          # large centred text (seconds left)
+	var corner := ""                       # top-right label (mana cost)
+	var corner_color := Color.WHITE
 
 	func _draw() -> void:
 		var box := Rect2(Vector2.ZERO, size)
@@ -22,9 +24,14 @@ class Tile extends Control:
 		draw_rect(box, fill)
 		if key != "":
 			draw_string(font, Vector2(6, 16), key, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1.0, 0.84, 0.25))
+		if corner != "":
+			draw_string(font, Vector2(0, 16), corner, HORIZONTAL_ALIGNMENT_RIGHT, size.x - 6, 13, corner_color)
 		if title != "":
-			var y := size.y * 0.5 + title_size * (0.9 if key != "" else 0.4)
-			draw_string(font, Vector2(2, y), title, HORIZONTAL_ALIGNMENT_CENTER, size.x - 4, title_size, Color(1, 1, 1, 0.92))
+			if key != "":
+				# Ability tile: the name wraps onto two small lines under the key.
+				draw_multiline_string(font, Vector2(2, 29), title, HORIZONTAL_ALIGNMENT_CENTER, size.x - 4, title_size, 2, Color(1, 1, 1, 0.92))
+			else:
+				draw_string(font, Vector2(2, size.y * 0.5 + title_size * 0.4), title, HORIZONTAL_ALIGNMENT_CENTER, size.x - 4, title_size, Color(1, 1, 1, 0.92))
 		if cover > 0.0:
 			draw_rect(Rect2(0, 0, size.x, size.y * clampf(cover, 0.0, 1.0)), Color(0, 0, 0, 0.68))
 		if big != "":
@@ -43,6 +50,11 @@ var _hp: ProgressBar
 var _hp_text: Label
 var _xp: ProgressBar
 var _xp_text: Label
+var _mana: ProgressBar
+var _mana_text: Label
+var _info: PanelContainer   # ability details, shown while hovering an ability tile
+var _info_text: RichTextLabel
+var _hover := -1            # ability slot under the mouse, or -1
 var _cam_note: Label
 var _range: Button
 var _board: PanelContainer
@@ -75,6 +87,7 @@ func _ready() -> void:
 	_build_panel(root)
 	_build_shop(root)
 	_build_board(root)
+	_build_info(root)
 
 	_center = Label.new()
 	_center.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -94,7 +107,7 @@ func _ready() -> void:
 	minimap.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	minimap.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
-	var help := _label("Right-click: move / attack    Q, W: abilities (aim with mouse)    B: shop    R: attack range    Y: free camera    Tab: scoreboard    F3: hear yourself" \
+	var help := _label("Right-click: move / attack    Q, W, E, R: abilities (aim with mouse)    B: shop    X: attack range    Y: free camera    Tab: scoreboard    F3: hear yourself" \
 		+ ("    V: fake yell (local test)" if Net.dev_mode else ""), 13, Color(1, 1, 1, 0.5))
 	help.position = Vector2(12, 8)
 	root.add_child(help)
@@ -167,7 +180,7 @@ func _build_panel(root: Control) -> void:
 	_stats = _label("", 12, Color(0.85, 0.88, 0.95))
 	left.add_child(_stats)
 	_range = Button.new()
-	_range.text = "Range [R]"
+	_range.text = "Range [X]"
 	_range.tooltip_text = "Show your basic attack range as a ring around your hero."
 	_range.toggle_mode = true
 	_range.focus_mode = Control.FOCUS_NONE
@@ -178,7 +191,7 @@ func _build_panel(root: Control) -> void:
 
 	# Middle: yell meter, health, abilities.
 	var mid := VBoxContainer.new()
-	mid.custom_minimum_size = Vector2(260, 0)
+	mid.custom_minimum_size = Vector2(292, 0)
 	mid.add_theme_constant_override("separation", 5)
 	row.add_child(mid)
 	_yell = _bar(Color(1.0, 0.45, 0.1), 14)
@@ -189,18 +202,24 @@ func _build_panel(root: Control) -> void:
 	_hp = _bar(Color(0.25, 0.75, 0.3), 24)
 	_hp_text = _bar_text(_hp, 14)
 	mid.add_child(_hp)
+	_mana = _bar(Color(0.25, 0.5, 0.95), 16)
+	_mana_text = _bar_text(_mana, 11)
+	mid.add_child(_mana)
 	_xp = _bar(Color(0.6, 0.45, 0.95), 12)
 	_xp_text = _bar_text(_xp, 10)
 	mid.add_child(_xp)
 	var cast := HBoxContainer.new()
 	cast.add_theme_constant_override("separation", 6)
 	mid.add_child(cast)
-	for key in ["Q", "W"]:
+	for key in ["Q", "W", "E", "R"]:
 		var tile := Tile.new()
 		tile.key = key
+		tile.title_size = 10
 		tile.custom_minimum_size = Vector2(0, 50)
 		tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		cast.add_child(tile)
+		tile.mouse_entered.connect(func(): _hover = _abilities.find(tile))
+		tile.mouse_exited.connect(func(): if _hover == _abilities.find(tile): _hover = -1)
 		_abilities.append(tile)
 
 	# Right: item slots, gold, shop button.
@@ -404,16 +423,28 @@ func _process(_delta: float) -> void:
 	_hp.max_value = hero.max_hp
 	_hp.value = hero.hp
 	_hp_text.text = "%d / %d" % [ceili(hero.hp), hero.max_hp]
+	_mana.max_value = hero.max_mana
+	_mana.value = hero.mana
+	_mana_text.text = "%d / %d" % [hero.mana, hero.max_mana]
+	_info.visible = _hover >= 0
+	if _hover >= 0:
+		var about := _ability_text(hero, _hover)
+		if _info_text.text != about:
+			_info_text.text = about
 	_gold.text = "%d g" % hero.gold
 
-	for slot in 2:
+	for slot in _abilities.size():
 		var tile: Tile = _abilities[slot]
-		var spec: Dictionary = hero.def["q" if slot == 0 else "w"]
-		var left: float = hero.cd_q if slot == 0 else hero.cd_w
+		var spec := hero.ability(slot)
+		var left: float = hero.cds[slot]
+		var locked: bool = hero.level < spec.get("level", 1)
 		tile.title = spec["name"]
-		tile.cover = left / hero.cooldown(slot)
-		tile.big = "%.1f" % left if left > 0.0 else ""
-		_tip(tile, _ability_text(hero, spec, slot))
+		tile.cover = 1.0 if locked else left / hero.cooldown(slot)
+		tile.big = ("Lv %d" % spec["level"]) if locked else ("%.1f" % left if left > 0.0 else "")
+		var short: bool = hero.mana < spec["mana"]
+		tile.corner = "%d" % spec["mana"]
+		tile.corner_color = Color(1.0, 0.45, 0.4) if short else Color(0.45, 0.7, 1.0)
+		tile.fill = Color(0.2, 0.1, 0.12) if short else Color(0.13, 0.14, 0.18)
 		tile.queue_redraw()
 
 	var open := hero.can_shop()
@@ -458,19 +489,91 @@ func _initials(text: String) -> String:
 	return out
 
 
-func _ability_text(hero: Hero, spec: Dictionary, slot: int) -> String:
+## Floats above the hero panel while the mouse is over an ability.
+func _build_info(root: Control) -> void:
+	_info = _panel()
+	_info.visible = false
+	_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_info)
+	_info.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM, Control.PRESET_MODE_MINSIZE, 178)
+	_info.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_info.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_info_text = RichTextLabel.new()
+	_info_text.bbcode_enabled = true
+	_info_text.fit_content = true
+	_info_text.scroll_active = false
+	_info_text.custom_minimum_size = Vector2(340, 0)
+	_info_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_info.add_child(_info_text)
+
+
+## What an ability does, with its numbers as they are right now (after
+## levels and items), as BBCode for the info panel.
+func _ability_text(hero: Hero, slot: int) -> String:
+	var spec := hero.ability(slot)
 	var what := ""
+	var facts := PackedStringArray()
 	var scaled := true
 	match spec["type"]:
-		"shot": what = "Fires a bolt toward the cursor for %d damage." % roundi(spec["dmg"] * hero.power)
-		"slam": what = "Hits every enemy around you for %d damage." % roundi(spec["dmg"] * hero.power)
-		"dash": what = "Leap toward the cursor and hit every enemy where you land for %d damage." % roundi(spec["dmg"] * hero.power)
-		"heal": what = "Heals allied heroes around you for %d." % roundi(spec["amount"] * hero.power)
+		"shot":
+			what = "Fires a bolt toward the cursor. " + ("It passes through every enemy in its path." if spec.get("pierce", false) else "It stops at the first enemy it hits.")
+			facts.append("Damage  %d" % roundi(spec["dmg"] * hero.power))
+			facts.append("Range  %d" % spec["range"])
+		"slam":
+			what = "Hits every enemy around you."
+			facts.append("Damage  %d" % roundi(spec["dmg"] * hero.power))
+			facts.append("Radius  %.1f" % spec["radius"])
+		"dash":
+			what = "Leap toward the cursor and hit every enemy where you land."
+			facts.append("Damage  %d" % roundi(spec["dmg"] * hero.power))
+			facts.append("Range  %d" % spec["range"])
+			facts.append("Radius  %.1f" % spec["radius"])
+		"heal":
+			what = "Heals you and allied heroes around you."
+			facts.append("Heal  %d" % roundi(spec["amount"] * hero.power))
+			facts.append("Radius  %.1f" % spec["radius"])
+		"blast":
+			what = "Blasts every enemy around the cursor."
+			facts.append("Damage  %d" % roundi(spec["dmg"] * hero.power))
+			facts.append("Range  %d" % spec["range"])
+			facts.append("Radius  %.1f" % spec["radius"])
+		"volley":
+			what = "Fires a fan of %d bolts toward the cursor. Each stops at the first enemy it hits." % spec["count"]
+			facts.append("Damage  %d each" % roundi(spec["dmg"] * hero.power))
+			facts.append("Range  %d" % spec["range"])
+		"drain":
+			what = "Hits every enemy around you and heals you for %d%% of the damage dealt." % roundi(spec["leech"] * 100.0)
+			facts.append("Damage  %d" % roundi(spec["dmg"] * hero.power))
+			facts.append("Radius  %.1f" % spec["radius"])
+		"buff":
+			var gains := PackedStringArray()
+			var stats: Dictionary = spec["stats"]
+			for key: String in stats:
+				match key:
+					"speed": gains.append("+%.1f move speed" % stats[key])
+					"haste": gains.append("+%d%% attack speed" % roundi(stats[key] * 100.0))
+					"power": gains.append("+%d%% ability power" % roundi(stats[key] * 100.0))
+					"armor": gains.append("%d%% less damage taken" % roundi(stats[key] * 100.0))
+			what = "%s for %d seconds: %s." % ["You and allied heroes around you gain" if spec.has("radius") else "You gain",
+				spec["time"], ", ".join(gains)]
+			if spec.has("radius"):
+				facts.append("Radius  %.1f" % spec["radius"])
+			scaled = false
 		_:
 			what = "Teleport toward the cursor."
+			facts.append("Range  %d" % spec["range"])
 			scaled = false
-	return "%s\n%s\nCooldown %.1f s.%s" % [spec["name"], what, hero.cooldown(slot),
-		" Yelling multiplies it." if scaled else ""]
+	var short: bool = hero.mana < spec["mana"]
+	var text := "[font_size=18][color=#ffd640]%s[/color][/font_size]   [color=#9aa0ad][%s][/color]\n%s\n" % [
+		spec["name"], Tune.SLOTS[slot].to_upper(), what]
+	if hero.level < spec.get("level", 1):
+		text += "[color=#ff7060]Unlocks at level %d.[/color]\n" % spec["level"]
+	text += "[color=#c8d0e0]%s[/color]\n" % "     ".join(facts)
+	text += "[color=#c8d0e0]Cooldown  %.1f s[/color]     [color=%s]Mana  %d%s[/color]" % [
+		hero.cooldown(slot), "#ff7060" if short else "#6fb0ff", spec["mana"], "  (not enough)" if short else ""]
+	if scaled:
+		text += "\n[color=#ff9a50]Yelling as it lands multiplies it, up to x%.0f.[/color]" % Tune.YELL_MULT_MAX
+	return text
 
 
 # --- Scoreboard ----------------------------------------------------------------------

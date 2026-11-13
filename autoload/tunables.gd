@@ -53,42 +53,60 @@ const FOUNTAIN_REGEN := 0.15      # share of max hp per second when calm at the 
 const SIGHT := {"hero": 16.0, "minion": 9.0, "tower": 13.0, "core": 13.0}
 const FOG_MAX_EYES := 64
 
+## Each hero has four abilities, on Q, W, E and R (the ultimate).
+const SLOTS := ["q", "w", "e", "r"]
+const ARMOR_MAX := 0.75
+
 ## Ability types: shot (line projectile), slam (damage around self),
 ## dash (leap to a point, damage on landing), blink (teleport),
-## heal (restore allies around self). All damage and healing is yell-scaled.
+## heal (restore allies around self), blast (damage around a point in range),
+## volley (a fan of shots), drain (damage around self, healing the caster by
+## "leech" of it), buff (temporary "stats" for "time" seconds, on self or, with
+## a "radius", on allied heroes around). A shot with "pierce" passes through
+## everything it hits. "level" is the hero level an ability unlocks at.
+## All damage and healing is yell-scaled.
+## Buff stats: speed, haste, power (as for items) and armor (share of damage ignored).
 ## "build" is the order in which a bot playing the hero buys items (Tune.ITEMS indices).
 const HEROES := [
 	{
 		"name": "Roarer", "role": "Ranged all-rounder", "shape": "caster",
 		"build": [0, 5, 4, 9, 2, 7],
-		"hp": 600.0, "speed": 7.0, "range": 6.5, "atk_cd": 0.8, "dmg": 50.0,
+		"hp": 600.0, "mana": 300.0, "speed": 7.0, "range": 6.5, "atk_cd": 0.8, "dmg": 50.0,
 		"accent": Color(1.0, 0.75, 0.2),
-		"q": {"name": "Sonic Bolt", "type": "shot", "cd": 5.0, "dmg": 110.0, "range": 14.0, "speed": 26.0, "radius": 0.9},
-		"w": {"name": "Shockwave", "type": "slam", "cd": 8.0, "dmg": 90.0, "radius": 4.0},
+		"q": {"name": "Sonic Bolt", "type": "shot", "cd": 5.0, "mana": 50.0, "dmg": 110.0, "range": 14.0, "speed": 26.0, "radius": 0.9},
+		"w": {"name": "Shockwave", "type": "slam", "cd": 8.0, "mana": 70.0, "dmg": 90.0, "radius": 4.0},
+		"e": {"name": "Echo Step", "type": "buff", "cd": 12.0, "mana": 50.0, "time": 4.0, "stats": {"speed": 3.0, "haste": 0.3}},
+		"r": {"name": "Stadium Roar", "type": "volley", "cd": 40.0, "mana": 120.0, "level": 3, "dmg": 100.0, "count": 5, "spread": 40.0, "range": 13.0, "speed": 28.0, "radius": 0.9},
 	},
 	{
 		"name": "Bruiser", "role": "Melee tank", "shape": "tank",
 		"build": [0, 1, 7, 8, 2, 6],
-		"hp": 900.0, "speed": 7.5, "range": 2.2, "atk_cd": 0.7, "dmg": 60.0,
+		"hp": 900.0, "mana": 250.0, "speed": 7.5, "range": 2.2, "atk_cd": 0.7, "dmg": 60.0,
 		"accent": Color(0.75, 0.75, 0.8),
-		"q": {"name": "Leap", "type": "dash", "cd": 7.0, "dmg": 80.0, "range": 9.0, "radius": 2.8},
-		"w": {"name": "Ground Pound", "type": "slam", "cd": 6.0, "dmg": 110.0, "radius": 4.5},
+		"q": {"name": "Leap", "type": "dash", "cd": 7.0, "mana": 50.0, "dmg": 80.0, "range": 9.0, "radius": 2.8},
+		"w": {"name": "Ground Pound", "type": "slam", "cd": 6.0, "mana": 60.0, "dmg": 110.0, "radius": 4.5},
+		"e": {"name": "Brace", "type": "buff", "cd": 14.0, "mana": 50.0, "time": 4.0, "stats": {"armor": 0.5}},
+		"r": {"name": "Feeding Frenzy", "type": "drain", "cd": 45.0, "mana": 110.0, "level": 3, "dmg": 180.0, "radius": 5.5, "leech": 0.6},
 	},
 	{
 		"name": "Longshot", "role": "Fragile sniper", "shape": "sniper",
 		"build": [1, 3, 8, 6, 2, 5],
-		"hp": 450.0, "speed": 6.5, "range": 9.5, "atk_cd": 1.1, "dmg": 65.0,
+		"hp": 450.0, "mana": 280.0, "speed": 6.5, "range": 9.5, "atk_cd": 1.1, "dmg": 65.0,
 		"accent": Color(0.6, 1.0, 0.5),
-		"q": {"name": "Piercing Cry", "type": "shot", "cd": 7.0, "dmg": 160.0, "range": 24.0, "speed": 42.0, "radius": 0.7},
-		"w": {"name": "Blink", "type": "blink", "cd": 9.0, "range": 8.0},
+		"q": {"name": "Piercing Cry", "type": "shot", "cd": 7.0, "mana": 70.0, "dmg": 160.0, "range": 24.0, "speed": 42.0, "radius": 0.7},
+		"w": {"name": "Blink", "type": "blink", "cd": 9.0, "mana": 60.0, "range": 8.0},
+		"e": {"name": "Flare Burst", "type": "blast", "cd": 9.0, "mana": 60.0, "dmg": 100.0, "range": 11.0, "radius": 3.0},
+		"r": {"name": "Last Word", "type": "shot", "cd": 45.0, "mana": 120.0, "level": 3, "dmg": 300.0, "range": 32.0, "speed": 55.0, "radius": 1.1, "pierce": true},
 	},
 	{
 		"name": "Chanter", "role": "Healer", "shape": "healer",
 		"build": [0, 5, 4, 9, 7, 2],
-		"hp": 550.0, "speed": 7.0, "range": 6.0, "atk_cd": 0.9, "dmg": 40.0,
+		"hp": 550.0, "mana": 350.0, "speed": 7.0, "range": 6.0, "atk_cd": 0.9, "dmg": 40.0,
 		"accent": Color(0.5, 1.0, 0.9),
-		"q": {"name": "Hymn Bolt", "type": "shot", "cd": 5.0, "dmg": 90.0, "range": 13.0, "speed": 24.0, "radius": 0.9},
-		"w": {"name": "Mending Chorus", "type": "heal", "cd": 10.0, "amount": 120.0, "radius": 5.5},
+		"q": {"name": "Hymn Bolt", "type": "shot", "cd": 5.0, "mana": 45.0, "dmg": 90.0, "range": 13.0, "speed": 24.0, "radius": 0.9},
+		"w": {"name": "Mending Chorus", "type": "heal", "cd": 10.0, "mana": 90.0, "amount": 120.0, "radius": 5.5},
+		"e": {"name": "Battle Hymn", "type": "buff", "cd": 16.0, "mana": 70.0, "time": 5.0, "radius": 6.0, "stats": {"haste": 0.3, "power": 0.2}},
+		"r": {"name": "Grand Chorus", "type": "heal", "cd": 50.0, "mana": 130.0, "level": 3, "amount": 350.0, "radius": 8.0},
 	},
 ]
 
@@ -113,6 +131,12 @@ const LEVEL_DMG := 0.06           # share of base attack damage gained per level
 const LEVEL_POWER := 0.05         # ability power gained per level
 const RESPAWN_PER_LEVEL := 1.5    # seconds added to the respawn timer per level
 
+# --- Mana ----------------------------------------------------------------------------
+## Abilities cost mana (each ability's "mana"); a hero's pool is its "mana".
+const MANA_REGEN := 5.0           # mana per second, always
+const LEVEL_MANA := 0.08          # share of base mana gained per level
+const FOUNTAIN_MANA := 0.2        # share of max mana per second at the fountain
+
 
 func xp_needed(level: int) -> float:
 	return XP_BASE + XP_STEP * (level - 1)
@@ -133,17 +157,18 @@ const CDR_MAX := 0.4
 ##   power   ability damage and healing (0.2 = +20%)
 ##   cdr     cooldown reduction (0.15 = 15%, capped at CDR_MAX)
 ##   speed   move speed            lifesteal share of basic attack damage healed
+##   mana    max mana
 const ITEMS := [
 	{"name": "Throat Lozenge", "cost": 250, "color": Color(0.45, 0.85, 0.5), "stats": {"hp": 150.0, "regen": 3.0}},
 	{"name": "Brass Knuckles", "cost": 300, "color": Color(0.9, 0.55, 0.3), "stats": {"dmg": 15.0}},
 	{"name": "Running Shoes", "cost": 300, "color": Color(0.5, 0.75, 1.0), "stats": {"speed": 1.0}},
 	{"name": "Metronome", "cost": 350, "color": Color(0.95, 0.85, 0.35), "stats": {"haste": 0.25}},
-	{"name": "Tuning Fork", "cost": 350, "color": Color(0.6, 0.9, 0.95), "stats": {"cdr": 0.15}},
+	{"name": "Tuning Fork", "cost": 350, "color": Color(0.6, 0.9, 0.95), "stats": {"cdr": 0.15, "mana": 150.0}},
 	{"name": "Amplifier", "cost": 400, "color": Color(0.8, 0.5, 1.0), "stats": {"power": 0.2}},
 	{"name": "Leech Reed", "cost": 600, "color": Color(0.9, 0.35, 0.45), "stats": {"dmg": 10.0, "lifesteal": 0.15}},
 	{"name": "Iron Lung", "cost": 700, "color": Color(0.3, 0.7, 0.4), "stats": {"hp": 400.0, "regen": 6.0}},
 	{"name": "War Drum", "cost": 750, "color": Color(0.85, 0.4, 0.2), "stats": {"dmg": 35.0, "haste": 0.15}},
-	{"name": "Stadium Speaker", "cost": 800, "color": Color(0.65, 0.35, 0.95), "stats": {"power": 0.45, "cdr": 0.1}},
+	{"name": "Stadium Speaker", "cost": 800, "color": Color(0.65, 0.35, 0.95), "stats": {"power": 0.45, "cdr": 0.1, "mana": 250.0}},
 ]
 
 
@@ -156,6 +181,7 @@ func item_text(index: int) -> String:
 		match key:
 			"hp": parts.append("+%d health" % v)
 			"regen": parts.append("+%d health regen" % v)
+			"mana": parts.append("+%d mana" % v)
 			"dmg": parts.append("+%d attack damage" % v)
 			"haste": parts.append("+%d%% attack speed" % roundi(v * 100.0))
 			"power": parts.append("+%d%% ability power" % roundi(v * 100.0))
@@ -175,8 +201,13 @@ const MINION_RANGE := 1.6
 const MINION_AGGRO := 7.0
 const TOWER_HP := 1600.0
 const TOWER_RANGE := 9.0
-const TOWER_DMG := 45.0
-const TOWER_CD := 1.0
+## A tower holds a beam on one target. Its damage per second climbs from
+## TOWER_DPS to TOWER_DPS_MAX over TOWER_RAMP seconds on the same target,
+## and starts over when the beam moves to someone else.
+const TOWER_DPS := 60.0
+const TOWER_DPS_MAX := 260.0
+const TOWER_RAMP := 4.0
+const TOWER_TICK := 0.25          # seconds between damage ticks
 const CORE_HP := 1500.0
 
 # --- Jungle monsters -------------------------------------------------------------

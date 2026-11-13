@@ -13,7 +13,7 @@ const CAM_EDGE := 10.0    # pixels from a screen edge that start a pan
 var free_cam := false     # local: camera detached from the hero (toggled with Y)
 var cam_focus := Vector3.ZERO  # ground point the camera looks at
 var _mouse_inside := true
-var show_range := false   # local: ring showing our hero's basic attack range (toggled with R)
+var show_range := false   # local: ring showing our hero's basic attack range (toggled with X)
 var _range_ring: MeshInstance3D
 
 var over := false
@@ -268,6 +268,8 @@ func deal_damage(source: Unit, target: Unit, base: float) -> float:
 	if source is Hero:
 		mult = Voice.multiplier_for(source.peer_id)
 	var amount := base * mult
+	if target is Hero:
+		amount *= 1.0 - target.armor
 	target.hp = maxf(0.0, target.hp - amount)
 	# Fighting pauses the faster out-of-combat regeneration.
 	if source is Hero:
@@ -348,7 +350,7 @@ func host_fire_shot(hero: Hero, dir: Vector3, spec: Dictionary) -> void:
 	var id := _next_shot
 	_next_shot += 1
 	var start := hero.position
-	_shots.append({"id": id, "pos": start, "dir": dir, "left": spec["range"], "owner": hero, "spec": spec})
+	_shots.append({"id": id, "pos": start, "dir": dir, "left": spec["range"], "owner": hero, "spec": spec, "hit": []})
 	fx_shot.rpc(id, start, dir, hero.team, spec["range"], spec["speed"])
 
 
@@ -362,15 +364,17 @@ func _tick_shots(delta: float) -> void:
 		var hit: Unit = null
 		if owner != null:
 			for u in units.get_children():
-				if u.team == owner.team or not u.targetable():
+				if u.team == owner.team or not u.targetable() or shot["hit"].has(u):
 					continue
 				var d: float = Vector2(u.position.x - shot["pos"].x, u.position.z - shot["pos"].z).length()
 				if d <= spec["radius"] + u.radius:
 					hit = u
 					break
 		if hit != null:
+			shot["hit"].append(hit)
 			deal_damage(owner, hit, spec["dmg"] * owner.power)
-		if hit != null or owner == null or shot["left"] <= 0.0:
+		# A piercing shot carries on through whatever it hits.
+		if (hit != null and not spec.get("pierce", false)) or owner == null or shot["left"] <= 0.0:
 			_shots.erase(shot)
 			fx_shot_end.rpc(shot["id"])
 
@@ -398,7 +402,7 @@ func mouse_ground() -> Vector3:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_Y:
 		free_cam = not free_cam
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_R:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_X:
 		show_range = not show_range
 	var hero := my_hero()
 	if hero == null or hero.dead or over:
@@ -412,10 +416,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			command(hero, "cmd_move", [point])
 			_ping(point)
 	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_Q:
-			command(hero, "cmd_cast", [0, mouse_ground()])
-		elif event.keycode == KEY_W:
-			command(hero, "cmd_cast", [1, mouse_ground()])
+		var slot := [KEY_Q, KEY_W, KEY_E, KEY_R].find(event.keycode)
+		if slot >= 0:
+			command(hero, "cmd_cast", [slot, mouse_ground()])
 		elif event.keycode == KEY_F3:
 			Voice.loopback = not Voice.loopback
 

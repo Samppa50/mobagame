@@ -5,8 +5,15 @@ extends Unit
 ## Stats and the Q/W kit come from Tune.HEROES (picked in the lobby).
 
 var def := {}
-var cd_q := 0.0
-var cd_w := 0.0
+var cds := [0.0, 0.0, 0.0, 0.0]  # cooldown left on Q, W, E, R
+var buff := {}:           # replicated: summed stats of the temporary buffs on this hero
+	set(value):
+		if value == buff:
+			return
+		buff = value
+		_apply_items()
+		if _aura != null:
+			_aura.visible = not buff.is_empty()
 var respawn_left := 0.0
 var gold := 0
 var kills := 0
@@ -34,6 +41,9 @@ var power := 1.0          # ability damage / healing multiplier
 var cdr := 0.0
 var regen_bonus := 0.0
 var lifesteal := 0.0
+var armor := 0.0          # share of incoming damage ignored (from buffs)
+var max_mana := 0.0
+var mana := 0.0           # replicated; spent by abilities
 
 # Host-only state.
 var _path := []           # waypoints still to walk
@@ -47,6 +57,8 @@ var _voice: AudioStreamPlayer3D
 var _tag: Label3D         # name and level above the hero
 var _title := ""
 var _brain: BotBrain      # host: the AI playing this hero, when its player is a bot
+var _buffs := []          # host: [stats, seconds left] per active buff
+var _aura: MeshInstance3D # ring shown while buffed
 var _gold_frac := 0.0   # host: passive income not yet paid out as whole gold
 
 
@@ -54,6 +66,7 @@ func _configure() -> void:
 	def = Tune.hero_def(int(spawn_data.get("hero", 0)))
 	gold = Tune.START_GOLD
 	_apply_items()
+	mana = max_mana
 	radius = 0.7
 	mobile = true
 	bar_height = 3.3
@@ -62,6 +75,12 @@ func _configure() -> void:
 	_title = str(Net.players.get(peer_id, {}).get("name", "Player"))
 	label.text = "%s  [%d]" % [_title, level]
 	_tag = label
+	# A golden ring at the feet while any buff is active.
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.95
+	ring.outer_radius = 1.15
+	_aura = add_body(ring, 0.15, Color(1.0, 0.85, 0.3), 2.5)
+	_aura.visible = false
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
 	label.font_size = 40
@@ -176,7 +195,7 @@ func _anim(anim: String) -> void:
 
 
 func _sync_props() -> Array:
-	return ["net_pos", "hp", "dead", "cd_q", "cd_w", "respawn_left", "gold", "items", "kills", "deaths", "cs", "xp", "level"]
+	return ["net_pos", "hp", "dead", "cds", "buff", "respawn_left", "gold", "items", "kills", "deaths", "cs", "xp", "level", "mana"]
 
 
 # --- Items ---------------------------------------------------------------------
@@ -187,6 +206,8 @@ func _apply_items() -> void:
 		return
 	var grown := level - 1
 	var sum := {}
+	for key: String in buff:
+		sum[key] = buff[key]
 	for index: int in items:
 		var stats: Dictionary = Tune.ITEMS[index]["stats"]
 		for key: String in stats:
@@ -199,11 +220,23 @@ func _apply_items() -> void:
 	cdr = minf(Tune.CDR_MAX, sum.get("cdr", 0.0))
 	regen_bonus = sum.get("regen", 0.0)
 	lifesteal = sum.get("lifesteal", 0.0)
+	armor = minf(Tune.ARMOR_MAX, sum.get("armor", 0.0))
+	max_mana = def["mana"] * (1.0 + Tune.LEVEL_MANA * grown) + sum.get("mana", 0.0)
 
 
-## Full cooldown of Q (slot 0) or W (slot 1) after cooldown reduction.
+func ability(slot: int) -> Dictionary:
+	return def[Tune.SLOTS[slot]]
+
+
+## Unlocked, off cooldown and enough mana (slots 0-3 are Q, W, E, R).
+func can_cast(slot: int) -> bool:
+	var spec := ability(slot)
+	return not dead and cds[slot] <= 0.0 and mana >= spec["mana"] and level >= spec.get("level", 1)
+
+
+## Full cooldown of an ability after cooldown reduction.
 func cooldown(slot: int) -> float:
-	return def["q" if slot == 0 else "w"]["cd"] * (1.0 - cdr)
+	return ability(slot)["cd"] * (1.0 - cdr)
 
 
 ## The shop is open at the team fountain and while waiting to respawn.
@@ -223,9 +256,11 @@ func add_xp(amount: float) -> void:
 	while level < Tune.MAX_LEVEL and xp >= Tune.xp_needed(level):
 		xp -= Tune.xp_needed(level)
 		var before := max_hp
+		var pool := max_mana
 		level += 1
 		if not dead:
 			hp += max_hp - before
+			mana += max_mana - pool
 		match_node().fx_level.rpc(position, level)
 	if level >= Tune.MAX_LEVEL:
 		xp = 0.0
@@ -279,9 +314,11 @@ func host_buy(index: int) -> void:
 		return
 	gold -= cost
 	var before := max_hp
+	var pool := max_mana
 	items = items + [index]
 	if not dead:
 		hp += maxf(0.0, max_hp - before)
+		mana += maxf(0.0, max_mana - pool)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -293,6 +330,7 @@ func cmd_sell(slot: int) -> void:
 	left.remove_at(slot)
 	items = left
 	hp = minf(hp, max_hp)
+	mana = minf(mana, max_mana)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -332,15 +370,11 @@ func idle() -> bool:
 
 
 func host_cast(slot: int, point: Vector3) -> void:
-	if dead or slot < 0 or slot > 1:
+	if slot < 0 or slot >= Tune.SLOTS.size() or not can_cast(slot):
 		return
-	if (cd_q if slot == 0 else cd_w) > 0.0:
-		return
-	var spec: Dictionary = def["q"] if slot == 0 else def["w"]
-	if slot == 0:
-		cd_q = cooldown(0)
-	else:
-		cd_w = cooldown(1)
+	var spec := ability(slot)
+	mana -= spec["mana"]
+	cds[slot] = cooldown(slot)
 	var m := match_node()
 	var to := Vector3(point.x - position.x, 0.0, point.z - position.z)
 	var dir := to.normalized() if to.length() > 0.01 else Tune.forward(team)
@@ -368,13 +402,66 @@ func host_cast(slot: int, point: Vector3) -> void:
 			for u in get_parent().get_children():
 				if u.kind == "hero" and u.team == team and not u.dead and flat_dist(u) <= spec["radius"]:
 					m.heal(self, u, spec["amount"] * power)
+		"blast":
+			var at := position + dir * minf(to.length(), spec["range"])
+			m.fx_slam.rpc(at, spec["radius"], tint)
+			_hit_around(spec["radius"], spec["dmg"] * power, at)
+		"volley":
+			# A fan of shots centred on the aim direction.
+			var count: int = spec["count"]
+			for i in count:
+				var turn := deg_to_rad(spec["spread"]) * (float(i) / (count - 1) - 0.5)
+				m.host_fire_shot(self, dir.rotated(Vector3.UP, turn), spec)
+		"drain":
+			m.fx_slam.rpc(position, spec["radius"], Color(0.9, 0.3, 0.4))
+			var dealt := _hit_around(spec["radius"], spec["dmg"] * power)
+			if dealt > 0.0 and not dead:
+				hp = minf(max_hp, hp + dealt * spec["leech"])
+				m.fx_damage.rpc(position, -dealt * spec["leech"], 1.0)
+		"buff":
+			m.fx_slam.rpc(position, spec.get("radius", 1.8), Color(1.0, 0.9, 0.4))
+			for u in get_parent().get_children():
+				if u == self or (spec.has("radius") and u is Hero and u.team == team and not u.dead and flat_dist(u) <= spec["radius"]):
+					u.host_buff(spec["stats"], spec["time"])
 
 
-func _hit_around(hit_radius: float, dmg: float) -> void:
+## Host: add a temporary set of stats (see Tune.HEROES for the keys).
+func host_buff(stats: Dictionary, time: float) -> void:
+	_buffs.append([stats, time])
+	_sum_buffs()
+
+
+func _tick_buffs(delta: float) -> void:
+	if _buffs.is_empty():
+		return
+	var live := []
+	for b: Array in _buffs:
+		b[1] -= delta
+		if b[1] > 0.0:
+			live.append(b)
+	if live.size() != _buffs.size():
+		_buffs = live
+		_sum_buffs()
+
+
+func _sum_buffs() -> void:
+	var sum := {}
+	for b: Array in _buffs:
+		for key: String in b[0]:
+			sum[key] = sum.get(key, 0.0) + b[0][key]
+	buff = sum
+
+
+## Damages every enemy within a radius of a point (this hero by default);
+## returns the total damage dealt.
+func _hit_around(hit_radius: float, dmg: float, centre := position) -> float:
 	var m := match_node()
+	var total := 0.0
 	for u in get_parent().get_children():
-		if u.team != team and u.targetable() and flat_dist(u) <= hit_radius + u.radius:
-			m.deal_damage(self, u, dmg)
+		if u.team != team and u.targetable() \
+				and Vector2(u.position.x - centre.x, u.position.z - centre.z).length() <= hit_radius + u.radius:
+			total += m.deal_damage(self, u, dmg)
+	return total
 
 
 # --- Host simulation -----------------------------------------------------------
@@ -395,8 +482,9 @@ func host_tick(delta: float) -> void:
 		net_pos = position
 		return
 	_regenerate(delta)
-	cd_q = maxf(0.0, cd_q - delta)
-	cd_w = maxf(0.0, cd_w - delta)
+	for slot in cds.size():
+		cds[slot] = maxf(0.0, cds[slot] - delta)
+	_tick_buffs(delta)
 	_atk_cd = maxf(0.0, _atk_cd - delta)
 	if _target != null and (not is_instance_valid(_target) or not _target.targetable()):
 		_target = null
@@ -429,6 +517,8 @@ func host_die() -> void:
 	deaths += 1
 	respawn_left = Tune.HERO_RESPAWN + Tune.RESPAWN_PER_LEVEL * (level - 1)
 	_target = null
+	_buffs = []
+	buff = {}
 	_path = []
 
 
@@ -436,6 +526,7 @@ func _respawn() -> void:
 	dead = false
 	_calm = Tune.CALM_AFTER
 	hp = max_hp
+	mana = max_mana
 	position = match_node().hero_spawn_point(self)
 
 
@@ -449,9 +540,12 @@ func note_combat() -> void:
 func _regenerate(delta: float) -> void:
 	_calm += delta
 	var rate := Tune.HERO_REGEN + regen_bonus
+	var fountain: Vector3 = Tune.map()["spawns"][team]
+	var resting := Vector2(position.x - fountain.x, position.z - fountain.z).length() <= Tune.FOUNTAIN_RADIUS
 	if _calm >= Tune.CALM_AFTER:
 		rate += max_hp * Tune.CALM_REGEN
-		var fountain: Vector3 = Tune.map()["spawns"][team]
-		if Vector2(position.x - fountain.x, position.z - fountain.z).length() <= Tune.FOUNTAIN_RADIUS:
+		if resting:
 			rate += max_hp * Tune.FOUNTAIN_REGEN
 	hp = minf(max_hp, hp + rate * delta)
+	# Mana trickles back everywhere and refills quickly at the fountain.
+	mana = minf(max_mana, mana + (Tune.MANA_REGEN + (max_mana * Tune.FOUNTAIN_MANA if resting else 0.0)) * delta)

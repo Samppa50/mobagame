@@ -139,12 +139,12 @@ func _pick_target(hero: Hero, foes: Array, danger: Array, health: float) -> Unit
 
 func _attack_with_abilities(hero: Hero, target: Unit, foes: Array, danger: Array, health: float) -> void:
 	var dist := hero.flat_dist(target)
-	for slot in 2:
-		if (hero.cd_q if slot == 0 else hero.cd_w) > 0.0:
+	for slot in Tune.SLOTS.size():
+		if not hero.can_cast(slot):
 			continue
-		var spec: Dictionary = hero.def["q" if slot == 0 else "w"]
+		var spec := hero.ability(slot)
 		match spec["type"]:
-			"shot":
+			"shot", "volley":
 				if dist <= spec["range"] * 0.85 + target.radius:
 					hero.host_cast(slot, target.position)
 					return
@@ -154,6 +154,24 @@ func _attack_with_abilities(hero: Hero, target: Unit, foes: Array, danger: Array
 					if hero.flat_dist(u) <= spec["radius"] + u.radius:
 						caught += 2 if u.kind == "hero" else 1
 				if caught >= 2:
+					hero.host_cast(slot, hero.position)
+					return
+			"drain":
+				# Worth it against a hero, or to recover in the middle of a wave.
+				var near := 0
+				for u: Unit in foes:
+					if hero.flat_dist(u) <= spec["radius"] + u.radius:
+						near += 3 if u.kind == "hero" else 1
+				if near >= 3 and health < 0.75:
+					hero.host_cast(slot, hero.position)
+					return
+			"blast":
+				if dist <= spec["range"] + spec["radius"] * 0.5:
+					hero.host_cast(slot, target.position)
+					return
+			"buff":
+				# Saved for real fights: an enemy hero, or a structure being pushed.
+				if (target.kind == "hero" or target.solid) and dist <= hero.def["range"] + 4.0:
 					hero.host_cast(slot, hero.position)
 					return
 			"dash":
@@ -166,13 +184,13 @@ func _attack_with_abilities(hero: Hero, target: Unit, foes: Array, danger: Array
 
 ## Heal when an allied hero in reach (or the bot itself) needs it.
 func _support(hero: Hero, units: Array) -> void:
-	for slot in 2:
-		var spec: Dictionary = hero.def["q" if slot == 0 else "w"]
-		if spec["type"] != "heal" or (hero.cd_q if slot == 0 else hero.cd_w) > 0.0:
+	for slot in Tune.SLOTS.size():
+		var spec := hero.ability(slot)
+		if spec["type"] != "heal" or not hero.can_cast(slot):
 			continue
 		for u: Unit in units:
 			if u.kind == "hero" and u.team == hero.team and not u.dead \
-					and hero.flat_dist(u) <= spec["radius"] and u.hp / u.max_hp < 0.65:
+					and hero.flat_dist(u) <= spec["radius"] and u.hp / u.max_hp < (0.65 if spec["amount"] < 200.0 else 0.45):
 				hero.host_cast(slot, hero.position)
 				return
 
@@ -181,9 +199,9 @@ func _support(hero: Hero, units: Array) -> void:
 func _go_home(hero: Hero, foes: Array) -> void:
 	var fountain: Vector3 = Tune.map()["spawns"][hero.team]
 	if _any_hero(foes):
-		for slot in 2:
-			var spec: Dictionary = hero.def["q" if slot == 0 else "w"]
-			if spec["type"] in ["blink", "dash"] and (hero.cd_q if slot == 0 else hero.cd_w) <= 0.0:
+		for slot in Tune.SLOTS.size():
+			var spec := hero.ability(slot)
+			if spec["type"] in ["blink", "dash"] and hero.can_cast(slot):
 				var way: Array = Tune.route(hero.position, fountain)
 				hero.host_cast(slot, hero.position + (way[0] - hero.position).normalized() * spec["range"])
 				_goal = Vector3.INF

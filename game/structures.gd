@@ -151,14 +151,46 @@ class Monster extends Unit:
 
 
 class Tower extends Unit:
+	var aim := ""              # replicated: name of the unit the beam is on ("" = idle)
+	var heat := 0.0            # replicated: 0..1, how far the beam has ramped up
 	var _crystal: MeshInstance3D
+	var _beam: MeshInstance3D
+	var _beam_mat: StandardMaterial3D
+	var _foe: Unit = null      # host: current beam target
+	var _held := 0.0           # host: seconds the beam has been on it
+	var _tick := 0.0
 
 	func _process(delta: float) -> void:
 		super(delta)
-		_crystal.rotation.y += delta * 0.9
+		_crystal.rotation.y += delta * (0.9 + heat * 6.0)
+		_draw_beam()
 
-	func _anim(_name: String) -> void:
-		pulse(_crystal, "scale", Vector3.ONE * 1.6, 0.06, 0.3)
+	## The beam is drawn on every peer from the replicated aim and heat: it
+	## thickens and turns from the team colour to white-hot as it ramps up.
+	func _draw_beam() -> void:
+		var target: Unit = (get_parent().get_node_or_null(aim) as Unit) if aim != "" else null
+		if target == null or dead or target.dead or target.fogged:
+			if _beam != null:
+				_beam.visible = false
+			return
+		if _beam == null:
+			_beam_mat = StandardMaterial3D.new()
+			_beam_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_beam_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			_beam = MeshInstance3D.new()
+			_beam.mesh = BoxMesh.new()
+			_beam.material_override = _beam_mat
+			_beam.top_level = true
+			_beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			add_child(_beam)
+		var from := position + Vector3(0, 6.2, 0)
+		var to := target.position + Vector3(0, 1.0, 0)
+		var width := lerpf(0.1, 0.45, heat) * (1.0 + 0.15 * sin(Time.get_ticks_msec() / 40.0))
+		var color := Tune.team_color(team).lightened(0.3).lerp(Color(1.0, 0.95, 0.8), heat)
+		_beam_mat.albedo_color = Color(color.r, color.g, color.b, 0.9)
+		_beam.visible = true
+		_beam.look_at_from_position((from + to) * 0.5, to)
+		_beam.scale = Vector3(width, width, from.distance_to(to))
 
 	## An inner tower cannot be hit while a tower further out in its lane stands.
 	func targetable() -> bool:
@@ -208,19 +240,33 @@ class Tower extends Unit:
 		lamp.position.y = 6.2
 		add_child(lamp)
 
+	## Keeps the beam on its target for as long as that target stays in range,
+	## hitting harder the longer it has been held. A new target (minions before
+	## heroes) is only picked once the old one is gone, and starts cold.
 	func host_tick(delta: float) -> void:
-		_atk_cd = maxf(0.0, _atk_cd - delta)
-		if _atk_cd > 0.0:
+		if _foe != null and (not is_instance_valid(_foe) or not _foe.targetable() \
+				or flat_dist(_foe) - _foe.radius > Tune.TOWER_RANGE):
+			_foe = null
+		if _foe == null:
+			_foe = nearest_enemy(Tune.TOWER_RANGE, "minion")
+			if _foe == null:
+				_foe = nearest_enemy(Tune.TOWER_RANGE, "hero")
+			_held = 0.0
+			_tick = 0.0
+		if _foe == null:
+			aim = ""
+			heat = 0.0
 			return
-		var foe := nearest_enemy(Tune.TOWER_RANGE, "minion")
-		if foe == null:
-			foe = nearest_enemy(Tune.TOWER_RANGE, "hero")
-		if foe != null:
-			_atk_cd = Tune.TOWER_CD
-			var m := match_node()
-			play_anim.rpc("attack", foe.position)
-			m.fx_beam.rpc(position + Vector3(0, 6.2, 0), foe.position, team)
-			m.deal_damage(self, foe, Tune.TOWER_DMG)
+		aim = String(_foe.name)
+		_held += delta
+		heat = clampf(_held / Tune.TOWER_RAMP, 0.0, 1.0)
+		_tick += delta
+		if _tick >= Tune.TOWER_TICK:
+			_tick -= Tune.TOWER_TICK
+			match_node().deal_damage(self, _foe, lerpf(Tune.TOWER_DPS, Tune.TOWER_DPS_MAX, heat) * Tune.TOWER_TICK)
+
+	func _sync_props() -> Array:
+		return ["net_pos", "hp", "dead", "aim", "heat"]
 
 
 class Core extends Unit:

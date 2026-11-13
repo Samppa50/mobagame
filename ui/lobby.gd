@@ -150,7 +150,7 @@ func _refresh() -> void:
 	for i in _hero_buttons.size():
 		_hero_buttons[i].set_pressed_no_signal(i == mine)
 	var d := Tune.hero_def(mine)
-	_hero_note.text = "%s: %s.  HP %d, range %.1f.  Q %s, W %s." % [d["name"], d["role"], d["hp"], d["range"], d["q"]["name"], d["w"]["name"]]
+	_hero_note.text = "%s: %s.  HP %d, range %.1f.\nQ %s,  W %s,  E %s,  R %s." % [d["name"], d["role"], d["hp"], d["range"], d["q"]["name"], d["w"]["name"], d["e"]["name"], d["r"]["name"]]
 
 
 func _process(_delta: float) -> void:

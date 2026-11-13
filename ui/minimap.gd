@@ -14,7 +14,7 @@ var _half := Vector2.ZERO  # map half extents (x, z)
 func _ready() -> void:
 	var m := Tune.map()
 	_half = Vector2(m["half_len"], m["half_wid"])
-	_scale = minf(3.6, minf(MAX_SIZE.x / (_half.x * 2.0), MAX_SIZE.y / (_half.y * 2.0)))
+	_scale = minf(3.2, minf(MAX_SIZE.x / (_half.x * 2.0), MAX_SIZE.y / (_half.y * 2.0)))
 	custom_minimum_size = _half * 2.0 * _scale + Vector2(PAD, PAD) * 2.0
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	clip_contents = true

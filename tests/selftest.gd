@@ -32,7 +32,7 @@ func run_client(m: Node) -> void:
 	await tree.create_timer(0.6).timeout
 	if me != null:
 		print("SELFTEST client: after buying over the network items=%s gold=%d max_hp=%.0f" % [me.items, me.gold, me.max_hp])
-	await tree.create_timer(1.5).timeout
+	await tree.create_timer(4.5).timeout
 	var host_hero: Hero = m.hero_for(1)
 	print("SELFTEST client: over=%s winner=%d my_team=%d host hero level=%d max_hp=%.0f" % [
 		m.over, m.winner, Net.my_team(), host_hero.level, host_hero.max_hp])
@@ -46,24 +46,50 @@ func run_kit(m: Node) -> void:
 	var dummy: Unit = m.host_spawn("minion", 1 - hero.team, hero.position + Tune.forward(hero.team) * 4.0)
 	dummy.max_hp = 5000.0
 	dummy.hp = 5000.0
+	hero.mana = 1.0
+	hero.cmd_cast(3, dummy.position)
+	check("the ultimate is locked at level 1", is_zero_approx(hero.cds[3]))
+	hero.level = hero.ability(3)["level"]
 	hero.hp = 100.0
+	hero.mana = hero.max_mana
 	var start := hero.position
-	for slot in 2:
-		var spec: Dictionary = hero.def["q" if slot == 0 else "w"]
+	for slot in Tune.SLOTS.size():
+		var spec := hero.ability(slot)
 		var hp_before := hero.hp
 		var dummy_before := dummy.hp
 		var pos_before := hero.position
+		var mana_before := hero.mana
 		hero.cmd_cast(slot, dummy.position)
+		check("%s costs mana" % spec["name"], is_equal_approx(hero.mana, mana_before - spec["mana"]), "%.0f -> %.0f" % [mana_before, hero.mana])
 		await tree.create_timer(0.7).timeout
 		var worked := false
 		match spec["type"]:
 			"heal": worked = hero.hp > hp_before + 50.0
 			"blink": worked = hero.position.distance_to(pos_before) > 2.0
+			"buff":
+				var gained := true
+				for key: String in spec["stats"]:
+					gained = gained and is_equal_approx(hero.buff.get(key, 0.0), spec["stats"][key])
+				worked = gained
 			_: worked = dummy.hp < dummy_before - 30.0
 		check("%s %s (%s)" % [hero.def["name"], spec["name"], spec["type"]], worked,
 			"dummy %.0f, hero hp %.0f, moved %.1f" % [dummy.hp, hero.hp, hero.position.distance_to(start)])
-		check("cooldown started", (hero.cd_q if slot == 0 else hero.cd_w) > 0.0)
+		check("cooldown started", hero.cds[slot] > 0.0)
 		hero.position = start
+	# Buffs wear off, and armor cuts the damage a hero takes.
+	hero.host_buff({"armor": 0.5}, 0.4)
+	hero.hp = hero.max_hp
+	var cut: float = m.deal_damage(dummy, hero, 100.0)
+	# (A hero whose own kit grants armor may still have that running too.)
+	check("armor reduces damage taken", hero.armor >= 0.5 and hero.armor <= Tune.ARMOR_MAX and is_equal_approx(cut, 100.0 * (1.0 - hero.armor)), "took %.0f" % cut)
+	await tree.create_timer(5.5).timeout
+	check("buffs wear off", hero.buff.is_empty() and is_zero_approx(hero.armor), str(hero.buff))
+	hero.cds[0] = 0.0
+	hero.mana = hero.ability(0)["mana"] - 1.0
+	hero.cmd_cast(0, dummy.position)
+	check("no cast without enough mana", is_zero_approx(hero.cds[0]) and hero.mana > 0.0)
+	await tree.create_timer(0.5).timeout
+	check("mana comes back at the fountain", hero.mana > hero.ability(0)["mana"], "%.0f" % hero.mana)
 	await _finish(tree)
 
 
@@ -334,6 +360,21 @@ func run(m: Node) -> void:
 		closest = minf(closest, a.flat_dist(gate))
 	check("hero cannot walk through a tower", closest >= gate.radius + a.radius - 0.05, "closest %.2f, needs %.2f" % [closest, gate.radius + a.radius])
 	check("hero gets around the tower", a.position.distance_to(far_side) < 0.5, "%.1f away" % a.position.distance_to(far_side))
+
+	# The tower beam: it stays on one target and hits harder the longer it holds.
+	a.position = gate.position + Vector3(5, 0, 0)
+	a.host_move(a.position)
+	gate._foe = a
+	gate._held = 0.0
+	a.hp = a.max_hp
+	await tree.create_timer(1.0).timeout
+	var first: float = a.max_hp - a.hp
+	a.hp = a.max_hp
+	await tree.create_timer(1.0).timeout
+	var second: float = a.max_hp - a.hp
+	check("tower beam locks on and damages", gate.aim == String(a.name) and first > Tune.TOWER_DPS * 0.7, "first second %.0f" % first)
+	check("tower beam ramps up over time", second > first * 1.3 and gate.heat > 0.4, "then %.0f, heat %.2f" % [second, gate.heat])
+	a.hp = a.max_hp
 
 	# Inner towers wait for the outer one; the core waits for a whole lane.
 	check("core untargetable while towers stand", not core.targetable())
