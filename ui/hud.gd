@@ -73,8 +73,9 @@ func _ready() -> void:
 	var minimap := preload("res://ui/minimap.gd").new()
 	minimap.match_node = match_node
 	root.add_child(minimap)
-	minimap.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT, Control.PRESET_MODE_MINSIZE, 12)
+	minimap.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT, Control.PRESET_MODE_MINSIZE, 12)
 	minimap.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	minimap.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
 	var help := Label.new()
 	help.text = "Right-click: move / attack    Q, W: abilities (aim with mouse)    F3: hear yourself" \
