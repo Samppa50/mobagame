@@ -6,6 +6,7 @@ var _mic: ProgressBar
 var _mic_note: Label
 var _start: Button
 var _hero_buttons := []
+var _map_buttons := []
 var _hero_note: Label
 
 
@@ -40,6 +41,21 @@ func _ready() -> void:
 		list.custom_minimum_size = Vector2(0, 150)
 		col.add_child(list)
 		_teams.append(list)
+
+	var map_row := HBoxContainer.new()
+	map_row.add_theme_constant_override("separation", 8)
+	box.add_child(map_row)
+	var map_label := Label.new()
+	map_label.text = "Map  "
+	map_row.add_child(map_label)
+	for i in Tune.maps.size():
+		var pick := Button.new()
+		pick.text = Tune.maps[i]["name"]
+		pick.toggle_mode = true
+		pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		pick.pressed.connect(Net.choose_map.bind(i))
+		map_row.add_child(pick)
+		_map_buttons.append(pick)
 
 	var hero_row := HBoxContainer.new()
 	hero_row.add_theme_constant_override("separation", 8)
@@ -102,6 +118,10 @@ func _refresh() -> void:
 	for team in 2:
 		_teams[team].text = names[team]
 	_start.visible = multiplayer.is_server()
+	# Only the host can change the map; everyone sees which one is picked.
+	for i in _map_buttons.size():
+		_map_buttons[i].set_pressed_no_signal(i == Net.map_id)
+		_map_buttons[i].disabled = not multiplayer.is_server()
 	var mine := int(Net.players.get(Net.my_id(), {}).get("hero", 0))
 	for i in _hero_buttons.size():
 		_hero_buttons[i].set_pressed_no_signal(i == mine)

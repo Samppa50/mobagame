@@ -39,7 +39,7 @@ func _on_match_starting() -> void:
 	Net.report_ready()
 
 
-## Dev flags, passed after "--":  --dev-host  --dev-join  --autostart=N  --selftest
+## Dev flags, passed after "--":  --dev-host  --dev-join  --autostart=N  --selftest  --hero=N  --map=N
 ## Steam passes "+connect_lobby <id>" when the game is launched from an invite.
 func _handle_args() -> void:
 	var user := OS.get_cmdline_user_args()
@@ -55,6 +55,8 @@ func _handle_args() -> void:
 	for arg in user:
 		if arg.begins_with("--hero=") and Net.online():
 			Net.choose_hero(int(arg.get_slice("=", 1)))
+		elif arg.begins_with("--map=") and Net.online():
+			Net.choose_map(int(arg.get_slice("=", 1)))
 	var all := OS.get_cmdline_args()
 	var i := all.find("+connect_lobby")
 	if i != -1 and i + 1 < all.size():

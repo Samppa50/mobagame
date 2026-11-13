@@ -73,18 +73,21 @@ func _spawn_unit(data: Dictionary) -> Node:
 	return u
 
 
-func host_spawn(kind: String, team: int, pos: Vector3, peer := 0, hero := 0) -> Unit:
-	return spawner.spawn({"kind": kind, "team": team, "pos": pos, "peer": peer, "hero": hero})
+func host_spawn(kind: String, team: int, pos: Vector3, peer := 0, hero := 0, extra := {}) -> Unit:
+	var data := {"kind": kind, "team": team, "pos": pos, "peer": peer, "hero": hero}
+	data.merge(extra)
+	return spawner.spawn(data)
 
 
 func host_begin() -> void:
 	if _started:
 		return
 	_started = true
+	var map := Tune.map()
 	for team in 2:
-		var s := -Tune.side(team)
-		host_spawn("core", team, Vector3(s * Tune.CORE_X, 0, 0))
-		host_spawn("tower", team, Vector3(s * Tune.TOWER_X, 0, 0))
+		host_spawn("core", team, map["cores"][team])
+	for t: Dictionary in map["towers"]:
+		host_spawn("tower", t["team"], t["pos"], 0, 0, {"lane": t["lane"], "tier": t["tier"]})
 	for peer in Net.players:
 		var team: int = Net.players[peer]["team"]
 		var h := host_spawn("hero", team, Vector3.ZERO, peer, int(Net.players[peer].get("hero", 0)))
@@ -102,7 +105,10 @@ func hero_spawn_point(hero: Unit) -> Vector3:
 			break
 		if u.kind == "hero" and u.team == hero.team:
 			slot += 1
-	return Vector3(-Tune.side(hero.team) * Tune.SPAWN_X, 0, (slot - 1) * 3.0)
+	# Lined up across the base, side by side.
+	var ahead := Tune.forward(hero.team)
+	var spawn: Vector3 = Tune.map()["spawns"][hero.team]
+	return Tune.clamp_to_map(spawn + Vector3(-ahead.z, 0, ahead.x) * (slot - 1) * 3.0)
 
 
 func hero_for(peer: int) -> Hero:
@@ -128,10 +134,18 @@ func _physics_process(delta: float) -> void:
 	_wave_left -= delta
 	if _wave_left <= 0.0:
 		_wave_left = Tune.WAVE_INTERVAL
+		var map := Tune.map()
+		var lanes: Array = map["lanes"]
 		for team in 2:
-			for i in Tune.WAVE_SIZE:
-				var x := -Tune.side(team) * (Tune.TOWER_X + 3.0 + i * 1.2)
-				host_spawn("minion", team, Vector3(x, 0, (i - 1) * 1.6))
+			for lane in lanes.size():
+				# A staggered file at this team's end of the lane.
+				var pts: Array = lanes[lane]
+				var start: Vector3 = pts[0] if team == 0 else pts[-1]
+				var ahead: Vector3 = ((pts[1] if team == 0 else pts[-2]) - start).normalized()
+				var across := Vector3(-ahead.z, 0, ahead.x)
+				for i in Tune.WAVE_SIZE:
+					var off := across * (i - 1) * 1.6
+					host_spawn("minion", team, Tune.clamp_to_map(start - ahead * i * 1.2 + off), 0, 0, {"lane": lane, "off": off})
 	for u in units.get_children():
 		if not u.is_queued_for_deletion():
 			u.host_tick(delta)
@@ -171,10 +185,12 @@ func _host_kill(target: Unit) -> void:
 		"core":
 			target.dead = true
 			over = true
+			fx_death.rpc(target.position, target.kind, target.team)
 			game_over.rpc(1 - target.team)
 			get_tree().create_timer(6.0).timeout.connect(Net.end_match)
 		_:
 			target.dead = true
+			fx_death.rpc(target.position, target.kind, target.team)
 			target.queue_free()
 
 
@@ -254,7 +270,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func order_move(point: Vector3) -> void:
 	var hero := my_hero()
 	if hero != null and not hero.dead and not over:
-		_command(hero, "cmd_move", [Tune.clamp_to_lane(point)])
+		_command(hero, "cmd_move", [Tune.clamp_to_map(point)])
 
 
 func _enemy_near(hero: Hero, point: Vector3) -> Unit:
@@ -337,6 +353,9 @@ func fx_shot(id: int, start: Vector3, dir: Vector3, team: int, shot_range: float
 	var tw := mi.create_tween()
 	tw.tween_property(mi, "position", mi.position + dir * shot_range, shot_range / speed)
 	tw.tween_callback(func(): fx_shot_end(id))
+	var throb := mi.create_tween().set_loops()
+	throb.tween_property(mi, "scale", Vector3.ONE * 1.35, 0.07)
+	throb.tween_property(mi, "scale", Vector3.ONE, 0.07)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -369,7 +388,36 @@ func _ping(point: Vector3) -> void:
 	mesh.height = 0.05
 	var mi := _glow(mesh, Color(0.6, 1.0, 0.6))
 	mi.position = Vector3(point.x, 0.08, point.z)
-	get_tree().create_timer(0.3).timeout.connect(mi.queue_free)
+	mi.scale = Vector3(1.8, 1.0, 1.8)
+	var tw := mi.create_tween()
+	tw.tween_property(mi, "scale", Vector3(0.1, 1.0, 0.1), 0.35).set_ease(Tween.EASE_OUT)
+	tw.tween_callback(mi.queue_free)
+
+
+## Debris burst where a minion, tower or core went down. Those units are
+## removed the moment they die, so the match plays their death for them.
+@rpc("authority", "call_local", "unreliable")
+func fx_death(pos: Vector3, unit_kind: String, team: int) -> void:
+	var big := unit_kind != "minion"
+	var color := Tune.team_color(team)
+	fx_slam(pos, 3.2 if big else 1.1, color.lightened(0.3))
+	for i in (16 if big else 7):
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3.ONE * randf_range(0.18, 0.4) * (2.2 if big else 1.0)
+		var mi := _glow(mesh, color if i % 2 == 0 else Color(0.6, 0.6, 0.64))
+		var angle := randf() * TAU
+		var reach := randf_range(1.0, 2.4) * (2.0 if big else 1.0)
+		var land := pos + Vector3(cos(angle) * reach, 0.1, sin(angle) * reach)
+		mi.position = pos + Vector3(0, randf_range(0.5, 5.5 if big else 1.4), 0)
+		var time := randf_range(0.4, 0.7)
+		var tw := mi.create_tween()
+		tw.set_parallel()
+		tw.tween_property(mi, "position:x", land.x, time)
+		tw.tween_property(mi, "position:z", land.z, time)
+		tw.tween_property(mi, "position:y", land.y, time).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		tw.tween_property(mi, "rotation", Vector3(randf() * 6.0, randf() * 6.0, randf() * 6.0), time)
+		tw.chain().tween_property(mi, "scale", Vector3.ONE * 0.05, 0.3)
+		tw.chain().tween_callback(mi.queue_free)
 
 
 func _glow(mesh: Mesh, color: Color) -> MeshInstance3D:

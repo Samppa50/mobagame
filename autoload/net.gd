@@ -25,6 +25,7 @@ var selftest := false
 var autostart := 0       # host auto-starts once this many players are present
 var lobby_id := 0
 var in_match := false
+var map_id := 0           # index into Tune.maps, chosen by the host in the lobby
 var match_node: Node = null
 var _joining_steam := false
 
@@ -232,6 +233,7 @@ func register(player_name: String) -> void:
 	if dev_mode:
 		clean = "%s #%d" % [clean, players.size() + 1]
 	players[id] = {"name": clean, "team": 0 if counts[0] <= counts[1] else 1, "hero": 0, "ready": false}
+	set_map.rpc_id(id, map_id)
 	set_roster.rpc(players)
 	if autostart > 0 and players.size() >= autostart:
 		start_match()
@@ -275,6 +277,18 @@ func choose_hero(index: int) -> void:
 		request_hero.rpc_id(1, index)
 
 
+## Host only: pick the map for the next match.
+func choose_map(index: int) -> void:
+	if multiplayer.is_server() and not in_match and index >= 0 and index < Tune.maps.size():
+		set_map.rpc(index)
+
+
+@rpc("authority", "call_local", "reliable")
+func set_map(index: int) -> void:
+	map_id = clampi(index, 0, Tune.maps.size() - 1)
+	roster_changed.emit()
+
+
 @rpc("authority", "call_local", "reliable")
 func set_roster(new_players: Dictionary) -> void:
 	var first := players.is_empty()
@@ -294,7 +308,7 @@ func start_match() -> void:
 	if lobby_id != 0:
 		Steam.setLobbyJoinable(lobby_id, false)
 	multiplayer.multiplayer_peer.refuse_new_connections = true
-	begin_match.rpc()
+	begin_match.rpc(map_id)
 	# Don't wait forever for a client that never reports ready.
 	get_tree().create_timer(5.0).timeout.connect(func():
 		if in_match:
@@ -304,7 +318,9 @@ func start_match() -> void:
 
 
 @rpc("authority", "call_local", "reliable")
-func begin_match() -> void:
+func begin_match(map: int) -> void:
+	map_id = clampi(map, 0, Tune.maps.size() - 1)
+	Tune.map_index = map_id
 	in_match = true
 	match_starting.emit()
 
