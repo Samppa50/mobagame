@@ -148,6 +148,93 @@ func _build_look() -> void:
 			robe.bottom_radius = 0.95
 			robe.height = 1.0
 			add_body(robe, 0.5, accent.darkened(0.2))
+		"skirmisher":
+			# Low and lean, with a claw on each side and two pointed ears.
+			capsule.radius = 0.5
+			capsule.height = 1.9
+			add_body(capsule, 0.95, body_color)
+			add_body(head, 2.1, body_color.lightened(0.25))
+			var ear := CylinderMesh.new()
+			ear.top_radius = 0.0
+			ear.bottom_radius = 0.16
+			ear.height = 0.5
+			var claw := PrismMesh.new()
+			claw.size = Vector3(0.22, 1.1, 0.5)
+			for x in [-1.0, 1.0]:
+				var e := add_body(ear, 2.6, accent)
+				e.position.x = x * 0.24
+				var c := add_body(claw, 1.1, accent, 0.6)
+				c.position.x = x * 0.8
+				c.position.z = -0.45
+				c.rotation_degrees.x = -90.0
+				_fists.append(c)
+		"drummer":
+			# A big drum carried in front and a stick in each hand.
+			capsule.radius = 0.6
+			capsule.height = 2.1
+			add_body(capsule, 1.05, body_color)
+			add_body(head, 2.4, body_color.lightened(0.25))
+			var drum := CylinderMesh.new()
+			drum.top_radius = 0.7
+			drum.bottom_radius = 0.7
+			drum.height = 0.55
+			var shell := add_body(drum, 1.25, accent)
+			shell.position.z = -0.9
+			var skin := CylinderMesh.new()
+			skin.top_radius = 0.62
+			skin.bottom_radius = 0.62
+			skin.height = 0.06
+			_part = add_body(skin, 1.55, Color(0.95, 0.92, 0.8))
+			_part.position.z = -0.9
+			var stick := CylinderMesh.new()
+			stick.top_radius = 0.07
+			stick.bottom_radius = 0.05
+			stick.height = 0.9
+			for x in [-0.45, 0.45]:
+				var s := add_body(stick, 2.0, accent.lightened(0.4))
+				s.position.x = x
+				s.position.z = -0.8
+				s.rotation_degrees.x = -35.0
+				_fists.append(s)
+		"warden":
+			# Broad, with a tall shield held forward and a crest on the helm.
+			radius = 0.8
+			capsule.radius = 0.7
+			capsule.height = 2.2
+			add_body(capsule, 1.1, body_color)
+			add_body(head, 2.5, body_color.lightened(0.25))
+			var slab := BoxMesh.new()
+			slab.size = Vector3(1.5, 1.9, 0.18)
+			_part = add_body(slab, 1.2, accent)
+			_part.position.z = -0.85
+			var boss := SphereMesh.new()
+			boss.radius = 0.28
+			boss.height = 0.4
+			var stud := add_body(boss, 1.2, accent.lightened(0.5), 1.0)
+			stud.position.z = -0.97
+			var crest := BoxMesh.new()
+			crest.size = Vector3(0.12, 0.45, 0.8)
+			add_body(crest, 3.0, accent)
+		"wraith":
+			# A thin, tapering figure with a wide collar and an orb overhead.
+			capsule.radius = 0.4
+			capsule.height = 1.6
+			add_body(capsule, 1.9, body_color)
+			add_body(head, 2.95, body_color.lightened(0.25))
+			var shroud := CylinderMesh.new()
+			shroud.top_radius = 0.45
+			shroud.bottom_radius = 0.05
+			shroud.height = 1.4
+			add_body(shroud, 0.75, body_color.darkened(0.25))
+			var collar := CylinderMesh.new()
+			collar.top_radius = 0.75
+			collar.bottom_radius = 0.3
+			collar.height = 0.35
+			add_body(collar, 2.45, accent)
+			var orb := SphereMesh.new()
+			orb.radius = 0.24
+			orb.height = 0.48
+			_part = add_body(orb, 3.7, accent, 3.0)
 		_:
 			capsule.radius = 0.6
 			capsule.height = 2.2
@@ -168,7 +255,9 @@ func _build_look() -> void:
 
 
 ## Each shape moves its own gear: the Bruiser punches, the Longshot's barrel
-## recoils, the Roarer's megaphone and the Chanter's halo pulse.
+## recoils, the Roarer's megaphone and the Chanter's halo pulse, the Howler
+## claws, the Drummer beats the drum, the Warden shoves its shield and the
+## Banshee's orb flares.
 func _anim(anim: String) -> void:
 	var cast := anim == "cast"
 	if cast:
@@ -189,6 +278,27 @@ func _anim(anim: String) -> void:
 			pulse(_part, "scale", Vector3.ONE * (1.9 if cast else 1.4), 0.12, 0.3)
 			if cast:
 				pulse(_part, "position:y", 3.9, 0.15, 0.3)
+		"skirmisher":
+			pulse(self, "_lunge", 0.6 if cast else 0.4, 0.05, 0.14)
+			if cast:
+				for c in _fists:
+					pulse(c, "position:z", -1.3, 0.06, 0.2)
+			else:
+				_punch += 1
+				pulse(_fists[_punch % 2], "position:z", -1.3, 0.05, 0.14)
+		"drummer":
+			_punch += 1
+			pulse(_part, "scale", Vector3.ONE * (1.6 if cast else 1.25), 0.05, 0.2)
+			for i in _fists.size():
+				if cast or i == _punch % 2:
+					pulse(_fists[i], "position:y", 1.7, 0.05, 0.16)
+		"warden":
+			pulse(_part, "position:z", -1.5 if cast else -1.2, 0.06, 0.2)
+			if cast:
+				pulse(_part, "scale", Vector3.ONE * 1.3, 0.08, 0.25)
+		"wraith":
+			pulse(_part, "scale", Vector3.ONE * (2.4 if cast else 1.6), 0.08, 0.25)
+			pulse(self, "_lunge", -0.15, 0.05, 0.2)
 		_:
 			pulse(_part, "scale", Vector3.ONE * (1.7 if cast else 1.35), 0.07, 0.2)
 			pulse(self, "_lunge", -0.12, 0.05, 0.15)
@@ -380,6 +490,7 @@ func host_cast(slot: int, point: Vector3) -> void:
 	var dir := to.normalized() if to.length() > 0.01 else Tune.forward(team)
 	var tint := Tune.team_color(team).lightened(0.3)
 	play_anim.rpc("cast", position + dir)
+	m.fx_cast.rpc(position, spec["type"])
 	match spec["type"]:
 		"shot":
 			m.host_fire_shot(self, dir, spec)

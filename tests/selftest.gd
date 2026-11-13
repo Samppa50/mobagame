@@ -43,6 +43,16 @@ func run_kit(m: Node) -> void:
 	var tree := m.get_tree()
 	await tree.create_timer(1.0).timeout
 	var hero: Hero = m.my_hero()
+	# Every ability type has a cast sound, and no synthesised sound is silent.
+	var quiet := PackedStringArray()
+	for sound: String in Sfx._streams:
+		var data: PackedByteArray = Sfx._streams[sound].data
+		var peak := 0
+		for i in range(0, data.size(), 2):
+			peak = maxi(peak, absi(data.decode_s16(i)))
+		if peak < 1500:
+			quiet.append(sound)
+	check("sound effects are synthesised", Sfx._streams.size() >= 20 and quiet.is_empty(), "%d sounds, silent: %s" % [Sfx._streams.size(), ", ".join(quiet)])
 	var dummy: Unit = m.host_spawn("minion", 1 - hero.team, hero.position + Tune.forward(hero.team) * 4.0)
 	dummy.max_hp = 5000.0
 	dummy.hp = 5000.0

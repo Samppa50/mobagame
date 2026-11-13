@@ -48,12 +48,14 @@ The host (peer 1) is authoritative and simulates everything; clients send comman
 - `autoload/tunables.gd` (`Tune`) — every balance number, hero / item / monster definitions, both map definitions, and walkability / routing helpers. Change numbers here, not in game code.
 - `autoload/net.gd` (`Net`) — session, lobby roster, match flow. `Net.players` maps peer id to `{name, team, hero, ready}`; bots are entries with negative ids and `"bot": true`.
 - `autoload/voice.gd` (`Voice`) — Steam voice capture, proximity relay, and the loudness that drives the yell multiplier.
+- `autoload/sfx.gd` (`Sfx`) — sound effects, synthesised in code at startup (no audio files) and played on an "SFX" bus. `Sfx.play` for UI / rewards; in a match use `Match._sound`, which is positional and silent inside the fog. Ability cast sounds are chosen by ability type in `Match.fx_cast`.
 - `game/match.gd` — one match: spawning, `deal_damage` (the single place damage is applied), kills / gold / xp, jungle camps, fog of war, camera, local input, visual effect RPCs. Must be named `Match` under `Main` on every peer.
 - `game/unit.gd` — base `Unit`: team, hp, replication (`_sync_props`), procedural animation.
 - `game/hero.gd` — `Hero`: `cmd_*` RPCs from the owner call `host_*` methods; stats are rebuilt from definition + level + items in `_apply_items`.
 - `game/structures.gd` — `Minion`, `Monster`, `Tower`, `Core` as inner classes.
 - `game/bot.gd` — `BotBrain`, host-side AI that orders a bot's hero through the same `host_*` methods.
 - `ui/hud.gd`, `ui/minimap.gd`, `ui/lobby.gd`, `ui/main_menu.gd` — all UI is built in code; there are no scene files besides `main.tscn`.
+- `ui/style.gd` — look shared by the main menu and lobby (theme, animated backdrop, drawn hero portraits), used via `preload`. A new hero "shape" needs a case in `Hero._build_look`, `Hero._anim` and `Portrait._draw`.
 
 ## Conventions
 

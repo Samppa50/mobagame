@@ -20,6 +20,7 @@ Tune="*res://autoload/tunables.gd"
 SteamManager="*res://autoload/steam_manager.gd"
 Net="*res://autoload/net.gd"
 Voice="*res://autoload/voice.gd"
+Sfx="*res://autoload/sfx.gd"
 
 [display]
 

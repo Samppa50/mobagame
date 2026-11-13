@@ -383,6 +383,7 @@ func _tick_shots(delta: float) -> void:
 func game_over(winning_team: int) -> void:
 	over = true
 	winner = winning_team
+	Sfx.play("win" if winning_team == Net.my_team() else "lose")
 
 
 # --- Local input ---------------------------------------------------------------------
@@ -418,6 +419,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var slot := [KEY_Q, KEY_W, KEY_E, KEY_R].find(event.keycode)
 		if slot >= 0:
+			if not hero.can_cast(slot):
+				Sfx.play("deny")
 			command(hero, "cmd_cast", [slot, mouse_ground()])
 		elif event.keycode == KEY_F3:
 			Voice.loopback = not Voice.loopback
@@ -528,12 +531,15 @@ func fx_damage(pos: Vector3, amount: float, mult: float) -> void:
 		("+" if healing else "") + str(int(round(absf(amount)))) + ("!" if t > 0.5 else ""),
 		Color(0.5, 1.0, 0.55) if healing else Color(1, 1, 1).lerp(Color(1.0, 0.25, 0.1), t),
 		int(lerpf(48.0, 120.0, t)))
+	if t > 0.5 and not healing:
+		_sound("crit", pos, lerpf(-6.0, 0.0, t))
 
 
 ## Gold earned; sent only to the player who earned it.
 @rpc("authority", "call_local", "reliable")
 func fx_gold(pos: Vector3, amount: int) -> void:
 	_float_text(pos + Vector3(0, 4.6, 0), "+%d g" % amount, Color(1.0, 0.84, 0.25), 56)
+	Sfx.play("coin", -6.0)
 
 
 ## A hero reached a new level.
@@ -541,6 +547,33 @@ func fx_gold(pos: Vector3, amount: int) -> void:
 func fx_level(pos: Vector3, level: int) -> void:
 	fx_slam(pos, 2.4, Color(1.0, 0.9, 0.4))
 	_float_text(pos + Vector3(0, 5.4, 0), "LEVEL %d" % level, Color(1.0, 0.9, 0.4), 72)
+	_sound("level", pos)
+
+
+## The sound of an ability being cast, by ability type (see Tune.HEROES).
+@rpc("authority", "call_local", "unreliable")
+func fx_cast(pos: Vector3, type: String) -> void:
+	match type:
+		"shot", "volley": _sound("shot", pos)
+		"slam": _sound("slam", pos)
+		"blast": _sound("blast", pos)
+		"dash": _sound("dash", pos)
+		"blink": _sound("blink", pos)
+		"heal": _sound("heal", pos)
+		"buff": _sound("buff", pos)
+		"drain": _sound("drain", pos)
+
+
+## Plays a positional sound, unless it comes from inside the fog of war:
+## what this player cannot see, they do not hear either.
+func _sound(sound: String, pos: Vector3, volume_db := 0.0, pitch := 1.0) -> void:
+	var audible := over or vision.is_empty()
+	for eye in vision:
+		if Vector2(eye.x - pos.x, eye.y - pos.z).length() <= eye.z:
+			audible = true
+			break
+	if audible:
+		Sfx.play_at(sound, pos, volume_db, pitch)
 
 
 func _float_text(pos: Vector3, text: String, color: Color, font_size: int) -> void:
@@ -566,6 +599,7 @@ func fx_beam(from: Vector3, to: Vector3, team: int) -> void:
 	var b := to + Vector3(0, 1.0, 0)
 	if a.distance_to(b) < 0.05:
 		return
+	_sound("zap", from, -8.0)
 	var mesh := BoxMesh.new()
 	mesh.size = Vector3(0.12, 0.12, a.distance_to(b))
 	var mi := _glow(mesh, Tune.team_color(team).lightened(0.4))
@@ -632,6 +666,12 @@ func _ping(point: Vector3) -> void:
 func fx_death(pos: Vector3, unit_kind: String, team: int) -> void:
 	var big := unit_kind == "tower" or unit_kind == "core"
 	var color := Tune.team_color(team)
+	if big:
+		_sound("crumble", pos, 0.0, 0.8 if unit_kind == "core" else 1.0)
+	elif unit_kind == "hero":
+		_sound("death", pos)
+	else:
+		_sound("pop", pos, -6.0, 0.7 if unit_kind == "monster" else 1.0)
 	fx_slam(pos, 3.2 if big else 1.1, color.lightened(0.3))
 	for i in (16 if big else 7):
 		var mesh := BoxMesh.new()

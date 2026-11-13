@@ -282,7 +282,12 @@ func add_bot(team: int) -> void:
 	for p in players.values():
 		if p["team"] == team:
 			used[p["hero"]] += 1
-	var hero: int = used.find(used.min())
+	# Ties go to a different hero for each bot, so the whole roster gets played.
+	var hero := 0
+	for i in used.size():
+		hero = (-_next_bot - 1 + i) % used.size()
+		if used[hero] == used.min():
+			break
 	players[_next_bot] = {"name": "Bot %d" % -_next_bot, "team": team, "hero": hero, "ready": true, "bot": true}
 	_next_bot -= 1
 	set_roster.rpc(players)
