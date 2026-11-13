@@ -11,6 +11,7 @@ var peer_id := 0          # owning player for heroes, 0 otherwise
 var lane := -1            # lane index for towers and minions
 var tier := 0             # towers: 0 = outer, higher = closer to the core
 var solid := false        # towers and cores: other units cannot walk through
+var fogged := false       # local only: an enemy outside our team's sight
 var max_hp := 100.0
 var hp := 100.0
 var dead := false
@@ -216,7 +217,7 @@ func _animate(delta: float) -> void:
 	if dead != _was_dead:
 		_was_dead = dead
 		_tween_grow(0.0 if dead else 1.0, 0.4 if dead else 0.3)
-	visible = _grow > 0.02
+	visible = _grow > 0.02 and not fogged
 
 	# Damage flash.
 	if hp < _last_hp - 0.5 and not dead:

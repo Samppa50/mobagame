@@ -38,8 +38,18 @@ var _nodes := []             # Vector3
 var _links := []             # per node: [[other node index, distance], ...]
 
 # --- Heroes ------------------------------------------------------------------
-const HERO_REGEN := 4.0
 const HERO_RESPAWN := 8.0
+const HERO_REGEN := 4.0           # hp per second, always
+const CALM_AFTER := 5.0           # seconds without dealing or taking damage
+const CALM_REGEN := 0.025         # extra share of max hp per second once calm
+const FOUNTAIN_RADIUS := 9.0      # around the team spawn point
+const FOUNTAIN_REGEN := 0.15      # share of max hp per second when calm at the fountain
+
+# --- Fog of war ----------------------------------------------------------------
+## How far each kind of unit sees. Enemy heroes and minions outside every
+## allied unit's sight are hidden; towers and cores are always shown.
+const SIGHT := {"hero": 16.0, "minion": 9.0, "tower": 13.0, "core": 13.0}
+const FOG_MAX_EYES := 64
 
 ## Ability types: shot (line projectile), slam (damage around self),
 ## dash (leap to a point, damage on landing), blink (teleport),

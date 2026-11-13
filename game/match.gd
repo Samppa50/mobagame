@@ -10,6 +10,33 @@ const CAM_OFFSET := Vector3(0, 27, 17)
 
 var over := false
 var winner := -1
+var vision := PackedVector3Array()  # (x, z, sight) of every allied unit; read by the minimap
+
+const FOG_SHADER := "
+shader_type spatial;
+render_mode unshaded, shadows_disabled, fog_disabled, depth_draw_never;
+
+uniform vec3 eyes[64];
+uniform int eye_count = 0;
+uniform float strength = 0.5;
+varying vec3 world;
+
+void vertex() {
+	world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
+void fragment() {
+	float lit = 0.0;
+	for (int i = 0; i < eye_count; i++) {
+		float d = distance(world.xz, eyes[i].xy);
+		lit = max(lit, 1.0 - smoothstep(eyes[i].z - 2.5, eyes[i].z, d));
+	}
+	ALBEDO = vec3(0.01, 0.02, 0.04);
+	ALPHA = strength * (1.0 - lit);
+}
+"
+
+var _fog: ShaderMaterial
 
 var _listener: AudioListener3D
 var _wave_left := 3.0
@@ -57,6 +84,51 @@ func _exit_tree() -> void:
 
 func _build_map() -> void:
 	MapBuilder.build(self)
+	# A glowing ring marks each team's fountain, where resting heals quickly.
+	for team in 2:
+		var ring := TorusMesh.new()
+		ring.inner_radius = Tune.FOUNTAIN_RADIUS - 0.25
+		ring.outer_radius = Tune.FOUNTAIN_RADIUS
+		var mi := _glow(ring, Tune.team_color(team).lightened(0.35))
+		mi.position = Tune.map()["spawns"][team] + Vector3(0, 0.09, 0)
+		mi.scale.y = 0.2
+	# Fog of war: a dark veil over the ground, cut open around allied units.
+	var veil := PlaneMesh.new()
+	veil.size = Vector2(420, 420)
+	_fog = ShaderMaterial.new()
+	_fog.shader = Shader.new()
+	_fog.shader.code = FOG_SHADER
+	_fog.render_priority = 1
+	var fog_plane := MeshInstance3D.new()
+	fog_plane.mesh = veil
+	fog_plane.material_override = _fog
+	fog_plane.position.y = 0.07
+	fog_plane.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(fog_plane)
+
+
+## Decides which enemies this player can see. Purely local and visual: the
+## host still simulates everything. Enemy heroes and minions are hidden unless
+## an allied hero, minion, tower or core has them in sight.
+func _update_fog() -> void:
+	var mine := Net.my_team()
+	vision.clear()
+	# Heroes and structures first, so they are never the ones cut by the cap.
+	for minions in [false, true]:
+		for u in units.get_children():
+			if u.team == mine and not u.dead and (u.kind == "minion") == minions and vision.size() < Tune.FOG_MAX_EYES:
+				vision.append(Vector3(u.position.x, u.position.z, Tune.SIGHT[u.kind]))
+	for u in units.get_children():
+		var hidden: bool = u.team != mine and not u.solid and not over
+		if hidden:
+			for eye in vision:
+				if Vector2(eye.x - u.position.x, eye.y - u.position.z).length() <= eye.z + u.radius:
+					hidden = false
+					break
+		u.fogged = hidden
+	_fog.set_shader_parameter("eyes", vision)
+	_fog.set_shader_parameter("eye_count", 0 if over else vision.size())
+	_fog.set_shader_parameter("strength", 0.0 if over else 0.5)
 
 
 # --- Spawning --------------------------------------------------------------------
@@ -162,6 +234,11 @@ func deal_damage(source: Unit, target: Unit, base: float) -> float:
 		mult = Voice.multiplier_for(source.peer_id)
 	var amount := base * mult
 	target.hp = maxf(0.0, target.hp - amount)
+	# Fighting pauses the faster out-of-combat regeneration.
+	if source is Hero:
+		source.note_combat()
+	if target is Hero:
+		target.note_combat()
 	if source is Hero or target is Hero:
 		fx_damage.rpc(target.position, amount, mult)
 	if target.hp <= 0.0:
@@ -277,7 +354,7 @@ func _enemy_near(hero: Hero, point: Vector3) -> Unit:
 	var best: Unit = null
 	var best_d := INF
 	for u in units.get_children():
-		if u.team == hero.team or not u.targetable():
+		if u.team == hero.team or not u.targetable() or u.fogged:
 			continue
 		var d: float = Vector2(u.position.x - point.x, u.position.z - point.z).length() - u.radius
 		if d < 1.0 and d < best_d:
@@ -294,6 +371,7 @@ func _command(hero: Hero, method: String, args: Array) -> void:
 
 
 func _process(_delta: float) -> void:
+	_update_fog()
 	var hero := my_hero()
 	if hero == null:
 		return

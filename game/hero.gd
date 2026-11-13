@@ -14,6 +14,7 @@ var _repath := 0.0
 var _part: Node3D         # signature gear that animates on attack / cast
 var _fists := []
 var _punch := 0
+var _calm := 0.0          # host: seconds since this hero last dealt or took damage
 var _target: Unit = null
 var _voice: AudioStreamPlayer3D
 
@@ -241,7 +242,7 @@ func host_tick(delta: float) -> void:
 			_respawn()
 		net_pos = position
 		return
-	hp = minf(max_hp, hp + Tune.HERO_REGEN * delta)
+	_regenerate(delta)
 	cd_q = maxf(0.0, cd_q - delta)
 	cd_w = maxf(0.0, cd_w - delta)
 	_atk_cd = maxf(0.0, _atk_cd - delta)
@@ -278,5 +279,24 @@ func host_die() -> void:
 
 func _respawn() -> void:
 	dead = false
+	_calm = Tune.CALM_AFTER
 	hp = max_hp
 	position = match_node().hero_spawn_point(self)
+
+
+## Called by the match whenever this hero deals or takes damage.
+func note_combat() -> void:
+	_calm = 0.0
+
+
+## A trickle at all times, a faster recovery once out of combat for a while,
+## and a rapid top-up when resting at the team's fountain (spawn point).
+func _regenerate(delta: float) -> void:
+	_calm += delta
+	var rate := Tune.HERO_REGEN
+	if _calm >= Tune.CALM_AFTER:
+		rate += max_hp * Tune.CALM_REGEN
+		var fountain: Vector3 = Tune.map()["spawns"][team]
+		if Vector2(position.x - fountain.x, position.z - fountain.z).length() <= Tune.FOUNTAIN_RADIUS:
+			rate += max_hp * Tune.FOUNTAIN_REGEN
+	hp = minf(max_hp, hp + rate * delta)

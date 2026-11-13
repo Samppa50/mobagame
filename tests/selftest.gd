@@ -79,6 +79,19 @@ func run(m: Node) -> void:
 	check("structures spawned", kinds.get("tower", 0) == Tune.map()["towers"].size() and kinds.get("core", 0) == 2, str(kinds))
 	check_geometry()
 
+	# Fog of war (local to this peer) and regeneration, while both heroes
+	# still stand at their own fountains on opposite sides of the map.
+	check("distant enemy hero is hidden by fog", b.fogged and not a.fogged)
+	a.hp = 100.0
+	a._calm = Tune.CALM_AFTER
+	await tree.create_timer(0.5).timeout
+	check("resting at the fountain heals quickly", a.hp > 100.0 + a.max_hp * Tune.FOUNTAIN_REGEN * 0.3, "hp %.0f" % a.hp)
+	a.note_combat()
+	var fought: float = a.hp
+	await tree.create_timer(0.3).timeout
+	check("in combat only the trickle remains", a.hp - fought < Tune.HERO_REGEN * 0.5, "+%.1f" % (a.hp - fought))
+	a.hp = a.max_hp
+
 	# Multiplier mapping.
 	check("silent = x1", is_equal_approx(Tune.yell_multiplier(-80.0), 1.0))
 	check("threshold = x1", is_equal_approx(Tune.yell_multiplier(Tune.YELL_DB_MIN), 1.0))
@@ -126,6 +139,7 @@ func run(m: Node) -> void:
 	a.cmd_attack(String(b.name))
 	await tree.create_timer(1.2).timeout
 	check("attack command damages target", b.hp < b.max_hp - a.def["dmg"] * 0.7, "hp %.0f" % b.hp)
+	check("enemy hero in sight is revealed", not b.fogged)
 
 	# The first wave is out by now: every lane has minions from both teams.
 	var seen := {}
