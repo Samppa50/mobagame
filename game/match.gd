@@ -1,0 +1,384 @@
+extends Node3D
+## One match: map, unit spawning, damage, win condition, local input and effects.
+## Must be named "Match" under Main on every peer so RPC paths line up.
+
+var units: Node3D
+var spawner: MultiplayerSpawner
+var camera: Camera3D
+var hud: CanvasLayer
+const CAM_OFFSET := Vector3(0, 27, 17)
+
+var over := false
+var winner := -1
+
+var _listener: AudioListener3D
+var _wave_left := 3.0
+var _shots := []          # host: active Q projectiles
+var _shot_fx := {}        # shot id -> visual node
+var _next_shot := 1
+var _started := false
+var _selftest: RefCounted
+
+
+func _ready() -> void:
+	name = "Match"
+	_build_map()
+	units = Node3D.new()
+	units.name = "Units"
+	add_child(units)
+	spawner = MultiplayerSpawner.new()
+	spawner.name = "Spawner"
+	spawner.spawn_function = _spawn_unit
+	add_child(spawner)
+	spawner.spawn_path = spawner.get_path_to(units)
+	camera = Camera3D.new()
+	camera.fov = 50.0
+	add_child(camera)
+	camera.position = CAM_OFFSET
+	camera.look_at(Vector3.ZERO)
+	camera.make_current()
+	hud = preload("res://ui/hud.gd").new()
+	hud.match_node = self
+	add_child(hud)
+	Net.match_node = self
+	if multiplayer.is_server():
+		Net.all_ready.connect(host_begin, CONNECT_ONE_SHOT)
+	elif Net.selftest:
+		_selftest = load("res://tests/selftest.gd").new()
+		_selftest.run_client(self)
+
+
+func _exit_tree() -> void:
+	if Net.match_node == self:
+		Net.match_node = null
+
+
+# --- Map -------------------------------------------------------------------------
+
+func _build_map() -> void:
+	MapBuilder.build(self)
+
+
+# --- Spawning --------------------------------------------------------------------
+
+## Runs on every peer for each replicated unit.
+func _spawn_unit(data: Dictionary) -> Node:
+	var u: Unit
+	match data["kind"]:
+		"hero": u = Hero.new()
+		"minion": u = Structures.Minion.new()
+		"tower": u = Structures.Tower.new()
+		_: u = Structures.Core.new()
+	u.setup(data)
+	return u
+
+
+func host_spawn(kind: String, team: int, pos: Vector3, peer := 0, hero := 0) -> Unit:
+	return spawner.spawn({"kind": kind, "team": team, "pos": pos, "peer": peer, "hero": hero})
+
+
+func host_begin() -> void:
+	if _started:
+		return
+	_started = true
+	for team in 2:
+		var s := -Tune.side(team)
+		host_spawn("core", team, Vector3(s * Tune.CORE_X, 0, 0))
+		host_spawn("tower", team, Vector3(s * Tune.TOWER_X, 0, 0))
+	for peer in Net.players:
+		var team: int = Net.players[peer]["team"]
+		var h := host_spawn("hero", team, Vector3.ZERO, peer, int(Net.players[peer].get("hero", 0)))
+		h.position = hero_spawn_point(h)
+		h.net_pos = h.position
+	if Net.selftest:
+		_selftest = load("res://tests/selftest.gd").new()
+		_selftest.run(self)
+
+
+func hero_spawn_point(hero: Unit) -> Vector3:
+	var slot := 0
+	for u in units.get_children():
+		if u == hero:
+			break
+		if u.kind == "hero" and u.team == hero.team:
+			slot += 1
+	return Vector3(-Tune.side(hero.team) * Tune.SPAWN_X, 0, (slot - 1) * 3.0)
+
+
+func hero_for(peer: int) -> Hero:
+	if units == null:
+		return null
+	for u in units.get_children():
+		if u.kind == "hero" and u.peer_id == peer:
+			return u
+	return null
+
+
+func host_remove_player(peer: int) -> void:
+	var h := hero_for(peer)
+	if h != null:
+		h.queue_free()
+
+
+# --- Host simulation ---------------------------------------------------------------
+
+func _physics_process(delta: float) -> void:
+	if not multiplayer.is_server() or not _started or over:
+		return
+	_wave_left -= delta
+	if _wave_left <= 0.0:
+		_wave_left = Tune.WAVE_INTERVAL
+		for team in 2:
+			for i in Tune.WAVE_SIZE:
+				var x := -Tune.side(team) * (Tune.TOWER_X + 3.0 + i * 1.2)
+				host_spawn("minion", team, Vector3(x, 0, (i - 1) * 1.6))
+	for u in units.get_children():
+		if not u.is_queued_for_deletion():
+			u.host_tick(delta)
+	_tick_shots(delta)
+
+
+## The single place damage is applied. Hero damage is scaled by how loud the
+## owning player is yelling right now (host-measured).
+func deal_damage(source: Unit, target: Unit, base: float) -> float:
+	if over or not is_instance_valid(target) or not target.targetable():
+		return 0.0
+	var mult := 1.0
+	if source is Hero:
+		mult = Voice.multiplier_for(source.peer_id)
+	var amount := base * mult
+	target.hp = maxf(0.0, target.hp - amount)
+	if source is Hero or target is Hero:
+		fx_damage.rpc(target.position, amount, mult)
+	if target.hp <= 0.0:
+		_host_kill(target)
+	return amount
+
+
+## Healing is yell-scaled too. Shown as a green "+N".
+func heal(source: Hero, target: Unit, base: float) -> void:
+	if over or not is_instance_valid(target) or target.dead:
+		return
+	var mult := Voice.multiplier_for(source.peer_id)
+	target.hp = minf(target.max_hp, target.hp + base * mult)
+	fx_damage.rpc(target.position, -base * mult, mult)
+
+
+func _host_kill(target: Unit) -> void:
+	match target.kind:
+		"hero":
+			target.host_die()
+		"core":
+			target.dead = true
+			over = true
+			game_over.rpc(1 - target.team)
+			get_tree().create_timer(6.0).timeout.connect(Net.end_match)
+		_:
+			target.dead = true
+			target.queue_free()
+
+
+func host_fire_shot(hero: Hero, dir: Vector3, spec: Dictionary) -> void:
+	var id := _next_shot
+	_next_shot += 1
+	var start := hero.position
+	_shots.append({"id": id, "pos": start, "dir": dir, "left": spec["range"], "owner": hero, "spec": spec})
+	fx_shot.rpc(id, start, dir, hero.team, spec["range"], spec["speed"])
+
+
+func _tick_shots(delta: float) -> void:
+	for shot in _shots.duplicate():
+		var spec: Dictionary = shot["spec"]
+		var step := minf(spec["speed"] * delta, shot["left"])
+		shot["pos"] += shot["dir"] * step
+		shot["left"] -= step
+		var owner: Hero = shot["owner"] if is_instance_valid(shot["owner"]) else null
+		var hit: Unit = null
+		if owner != null:
+			for u in units.get_children():
+				if u.team == owner.team or not u.targetable():
+					continue
+				var d: float = Vector2(u.position.x - shot["pos"].x, u.position.z - shot["pos"].z).length()
+				if d <= spec["radius"] + u.radius:
+					hit = u
+					break
+		if hit != null:
+			deal_damage(owner, hit, spec["dmg"])
+		if hit != null or owner == null or shot["left"] <= 0.0:
+			_shots.erase(shot)
+			fx_shot_end.rpc(shot["id"])
+
+
+@rpc("authority", "call_local", "reliable")
+func game_over(winning_team: int) -> void:
+	over = true
+	winner = winning_team
+
+
+# --- Local input ---------------------------------------------------------------------
+
+func my_hero() -> Hero:
+	return hero_for(multiplayer.get_unique_id())
+
+
+func mouse_ground() -> Vector3:
+	var mouse := get_viewport().get_mouse_position()
+	var origin := camera.project_ray_origin(mouse)
+	var dir := camera.project_ray_normal(mouse)
+	var hit = Plane(Vector3.UP, 0.0).intersects_ray(origin, dir)
+	return hit if hit != null else Vector3.ZERO
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	var hero := my_hero()
+	if hero == null or hero.dead or over:
+		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		var point := mouse_ground()
+		var target := _enemy_near(hero, point)
+		if target != null:
+			_command(hero, "cmd_attack", [String(target.name)])
+		else:
+			_command(hero, "cmd_move", [point])
+			_ping(point)
+	elif event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_Q:
+			_command(hero, "cmd_cast", [0, mouse_ground()])
+		elif event.keycode == KEY_W:
+			_command(hero, "cmd_cast", [1, mouse_ground()])
+		elif event.keycode == KEY_F3:
+			Voice.loopback = not Voice.loopback
+
+
+## Used by the minimap: walk to a world point.
+func order_move(point: Vector3) -> void:
+	var hero := my_hero()
+	if hero != null and not hero.dead and not over:
+		_command(hero, "cmd_move", [Tune.clamp_to_lane(point)])
+
+
+func _enemy_near(hero: Hero, point: Vector3) -> Unit:
+	var best: Unit = null
+	var best_d := INF
+	for u in units.get_children():
+		if u.team == hero.team or not u.targetable():
+			continue
+		var d: float = Vector2(u.position.x - point.x, u.position.z - point.z).length() - u.radius
+		if d < 1.0 and d < best_d:
+			best = u
+			best_d = d
+	return best
+
+
+func _command(hero: Hero, method: String, args: Array) -> void:
+	if multiplayer.is_server():
+		hero.callv(method, args)
+	else:
+		hero.callv("rpc_id", [1, method] + args)
+
+
+func _process(_delta: float) -> void:
+	var hero := my_hero()
+	if hero == null:
+		return
+	camera.position = hero.position + CAM_OFFSET
+	# Ears on the hero, not the camera, so voice volume follows hero distance.
+	if _listener == null or not is_instance_valid(_listener):
+		_listener = AudioListener3D.new()
+		_listener.position.y = 1.6
+		hero.add_child(_listener)
+		_listener.make_current()
+
+
+# --- Effects (visual only, run on every peer) ------------------------------------------
+
+@rpc("authority", "call_local", "unreliable")
+func fx_damage(pos: Vector3, amount: float, mult: float) -> void:
+	var t := clampf((mult - 1.0) / (Tune.YELL_MULT_MAX - 1.0), 0.0, 1.0)
+	var label := Label3D.new()
+	var healing := amount < 0.0
+	label.text = ("+" if healing else "") + str(int(round(absf(amount)))) + ("!" if t > 0.5 else "")
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.font_size = int(lerpf(48.0, 120.0, t))
+	label.pixel_size = 0.012
+	label.outline_size = 14
+	label.modulate = Color(0.5, 1.0, 0.55) if healing else Color(1, 1, 1).lerp(Color(1.0, 0.25, 0.1), t)
+	label.position = pos + Vector3(randf_range(-0.5, 0.5), 3.2, 0)
+	add_child(label)
+	var tw := label.create_tween()
+	tw.tween_property(label, "position:y", label.position.y + 2.5, 0.9)
+	tw.parallel().tween_property(label, "modulate:a", 0.0, 0.9).set_ease(Tween.EASE_IN)
+	tw.tween_callback(label.queue_free)
+
+
+@rpc("authority", "call_local", "unreliable")
+func fx_beam(from: Vector3, to: Vector3, team: int) -> void:
+	var a := from + Vector3(0, 1.2, 0) if from.y < 1.0 else from
+	var b := to + Vector3(0, 1.0, 0)
+	if a.distance_to(b) < 0.05:
+		return
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(0.12, 0.12, a.distance_to(b))
+	var mi := _glow(mesh, Tune.team_color(team).lightened(0.4))
+	mi.position = (a + b) * 0.5
+	mi.look_at_from_position(mi.position, b, Vector3.UP if absf((b - a).normalized().y) < 0.99 else Vector3.RIGHT)
+	get_tree().create_timer(0.12).timeout.connect(mi.queue_free)
+
+
+@rpc("authority", "call_local", "reliable")
+func fx_shot(id: int, start: Vector3, dir: Vector3, team: int, shot_range: float, speed: float) -> void:
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.45
+	mesh.height = 0.9
+	var mi := _glow(mesh, Tune.team_color(team).lightened(0.5))
+	mi.position = start + Vector3(0, 1.1, 0)
+	_shot_fx[id] = mi
+	var tw := mi.create_tween()
+	tw.tween_property(mi, "position", mi.position + dir * shot_range, shot_range / speed)
+	tw.tween_callback(func(): fx_shot_end(id))
+
+
+@rpc("authority", "call_local", "reliable")
+func fx_shot_end(id: int) -> void:
+	if _shot_fx.has(id):
+		if is_instance_valid(_shot_fx[id]):
+			_shot_fx[id].queue_free()
+		_shot_fx.erase(id)
+
+
+@rpc("authority", "call_local", "unreliable")
+func fx_slam(pos: Vector3, slam_radius: float, color: Color) -> void:
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = slam_radius
+	mesh.bottom_radius = slam_radius
+	mesh.height = 0.1
+	var mi := _glow(mesh, color)
+	mi.position = pos + Vector3(0, 0.15, 0)
+	mi.scale = Vector3(0.2, 1, 0.2)
+	var tw := mi.create_tween()
+	tw.tween_property(mi, "scale", Vector3.ONE, 0.18)
+	tw.tween_interval(0.12)
+	tw.tween_callback(mi.queue_free)
+
+
+func _ping(point: Vector3) -> void:
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 0.4
+	mesh.bottom_radius = 0.4
+	mesh.height = 0.05
+	var mi := _glow(mesh, Color(0.6, 1.0, 0.6))
+	mi.position = Vector3(point.x, 0.08, point.z)
+	get_tree().create_timer(0.3).timeout.connect(mi.queue_free)
+
+
+func _glow(mesh: Mesh, color: Color) -> MeshInstance3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(color.r, color.g, color.b, 0.85)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	add_child(mi)
+	return mi
