@@ -10,6 +10,7 @@ const CAM_OFFSET := Vector3(0, 27, 17)
 
 var over := false
 var winner := -1
+var clock := 0.0          # local: seconds since our hero appeared; shown on the HUD
 var vision := PackedVector3Array()  # (x, z, sight) of every allied unit; read by the minimap
 
 const FOG_SHADER := "
@@ -40,6 +41,7 @@ var _fog: ShaderMaterial
 
 var _listener: AudioListener3D
 var _wave_left := 3.0
+var _camps := []          # host: {pos, size, unit, left} per jungle camp
 var _shots := []          # host: active Q projectiles
 var _shot_fx := {}        # shot id -> visual node
 var _next_shot := 1
@@ -92,6 +94,14 @@ func _build_map() -> void:
 		var mi := _glow(ring, Tune.team_color(team).lightened(0.35))
 		mi.position = Tune.map()["spawns"][team] + Vector3(0, 0.09, 0)
 		mi.scale.y = 0.2
+	# An amber ring marks each jungle camp.
+	for camp: Dictionary in Tune.map()["camps"]:
+		var mark := TorusMesh.new()
+		mark.outer_radius = 1.6 * Tune.MONSTERS[camp["size"]]["scale"]
+		mark.inner_radius = mark.outer_radius - 0.15
+		var ring := _glow(mark, Tune.team_color(Tune.NEUTRAL))
+		ring.position = camp["pos"] + Vector3(0, 0.09, 0)
+		ring.scale.y = 0.2
 	# Fog of war: a dark veil over the ground, cut open around allied units.
 	var veil := PlaneMesh.new()
 	veil.size = Vector2(420, 420)
@@ -139,6 +149,7 @@ func _spawn_unit(data: Dictionary) -> Node:
 	match data["kind"]:
 		"hero": u = Hero.new()
 		"minion": u = Structures.Minion.new()
+		"monster": u = Structures.Monster.new()
 		"tower": u = Structures.Tower.new()
 		_: u = Structures.Core.new()
 	u.setup(data)
@@ -160,6 +171,8 @@ func host_begin() -> void:
 		host_spawn("core", team, map["cores"][team])
 	for t: Dictionary in map["towers"]:
 		host_spawn("tower", t["team"], t["pos"], 0, 0, {"lane": t["lane"], "tier": t["tier"]})
+	for camp: Dictionary in map["camps"]:
+		_camps.append({"pos": camp["pos"], "size": camp["size"], "unit": null, "left": 0.0})
 	for peer in Net.players:
 		var team: int = Net.players[peer]["team"]
 		var h := host_spawn("hero", team, Vector3.ZERO, peer, int(Net.players[peer].get("hero", 0)))
@@ -222,6 +235,20 @@ func _physics_process(delta: float) -> void:
 		if not u.is_queued_for_deletion():
 			u.host_tick(delta)
 	_tick_shots(delta)
+	_tick_camps(delta)
+
+
+## Fills every jungle camp at the start, and again a while after it is cleared.
+func _tick_camps(delta: float) -> void:
+	for camp: Dictionary in _camps:
+		var monster = camp["unit"]
+		if monster != null and is_instance_valid(monster) and not monster.dead:
+			continue
+		camp["unit"] = null
+		camp["left"] -= delta
+		if camp["left"] <= 0.0:
+			camp["left"] = Tune.MONSTER_RESPAWN
+			camp["unit"] = host_spawn("monster", Tune.NEUTRAL, camp["pos"], 0, 0, {"size": camp["size"]})
 
 
 ## The single place damage is applied. Hero damage is scaled by how loud the
@@ -239,10 +266,12 @@ func deal_damage(source: Unit, target: Unit, base: float) -> float:
 		source.note_combat()
 	if target is Hero:
 		target.note_combat()
+	if target is Structures.Monster and source is Hero:
+		target.provoke(source)
 	if source is Hero or target is Hero:
 		fx_damage.rpc(target.position, amount, mult)
 	if target.hp <= 0.0:
-		_host_kill(target)
+		_host_kill(target, source)
 	return amount
 
 
@@ -255,7 +284,26 @@ func heal(source: Hero, target: Unit, base: float) -> void:
 	fx_damage.rpc(target.position, -base * mult, mult)
 
 
-func _host_kill(target: Unit) -> void:
+func _host_kill(target: Unit, source: Unit) -> void:
+	# Bounties: the killing blow pays for heroes and minions; a fallen tower
+	# pays the whole enemy team, whoever finished it.
+	var killer: Hero = source as Hero
+	match target.kind:
+		"hero":
+			if killer != null:
+				killer.kills += 1
+				killer.earn(Tune.GOLD_HERO)
+		"minion":
+			if killer != null:
+				killer.cs += 1
+				killer.earn(Tune.GOLD_MINION)
+		"monster":
+			if killer != null:
+				killer.earn(target.spec["gold"])
+		"tower":
+			for u in units.get_children():
+				if u is Hero and u.team != target.team:
+					u.earn(Tune.GOLD_TOWER)
 	match target.kind:
 		"hero":
 			target.host_die()
@@ -296,7 +344,7 @@ func _tick_shots(delta: float) -> void:
 					hit = u
 					break
 		if hit != null:
-			deal_damage(owner, hit, spec["dmg"])
+			deal_damage(owner, hit, spec["dmg"] * owner.power)
 		if hit != null or owner == null or shot["left"] <= 0.0:
 			_shots.erase(shot)
 			fx_shot_end.rpc(shot["id"])
@@ -330,15 +378,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		var point := mouse_ground()
 		var target := _enemy_near(hero, point)
 		if target != null:
-			_command(hero, "cmd_attack", [String(target.name)])
+			command(hero, "cmd_attack", [String(target.name)])
 		else:
-			_command(hero, "cmd_move", [point])
+			command(hero, "cmd_move", [point])
 			_ping(point)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_Q:
-			_command(hero, "cmd_cast", [0, mouse_ground()])
+			command(hero, "cmd_cast", [0, mouse_ground()])
 		elif event.keycode == KEY_W:
-			_command(hero, "cmd_cast", [1, mouse_ground()])
+			command(hero, "cmd_cast", [1, mouse_ground()])
 		elif event.keycode == KEY_F3:
 			Voice.loopback = not Voice.loopback
 
@@ -347,7 +395,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func order_move(point: Vector3) -> void:
 	var hero := my_hero()
 	if hero != null and not hero.dead and not over:
-		_command(hero, "cmd_move", [Tune.clamp_to_map(point)])
+		command(hero, "cmd_move", [Tune.clamp_to_map(point)])
 
 
 func _enemy_near(hero: Hero, point: Vector3) -> Unit:
@@ -363,18 +411,20 @@ func _enemy_near(hero: Hero, point: Vector3) -> Unit:
 	return best
 
 
-func _command(hero: Hero, method: String, args: Array) -> void:
+func command(hero: Hero, method: String, args: Array) -> void:
 	if multiplayer.is_server():
 		hero.callv(method, args)
 	else:
 		hero.callv("rpc_id", [1, method] + args)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	_update_fog()
 	var hero := my_hero()
 	if hero == null:
 		return
+	if not over:
+		clock += delta
 	camera.position = hero.position + CAM_OFFSET
 	# Ears on the hero, not the camera, so voice volume follows hero distance.
 	if _listener == null or not is_instance_valid(_listener):
@@ -389,16 +439,29 @@ func _process(_delta: float) -> void:
 @rpc("authority", "call_local", "unreliable")
 func fx_damage(pos: Vector3, amount: float, mult: float) -> void:
 	var t := clampf((mult - 1.0) / (Tune.YELL_MULT_MAX - 1.0), 0.0, 1.0)
-	var label := Label3D.new()
 	var healing := amount < 0.0
-	label.text = ("+" if healing else "") + str(int(round(absf(amount)))) + ("!" if t > 0.5 else "")
+	_float_text(pos + Vector3(randf_range(-0.5, 0.5), 3.2, 0),
+		("+" if healing else "") + str(int(round(absf(amount)))) + ("!" if t > 0.5 else ""),
+		Color(0.5, 1.0, 0.55) if healing else Color(1, 1, 1).lerp(Color(1.0, 0.25, 0.1), t),
+		int(lerpf(48.0, 120.0, t)))
+
+
+## Gold earned; sent only to the player who earned it.
+@rpc("authority", "call_local", "reliable")
+func fx_gold(pos: Vector3, amount: int) -> void:
+	_float_text(pos + Vector3(0, 4.6, 0), "+%d g" % amount, Color(1.0, 0.84, 0.25), 56)
+
+
+func _float_text(pos: Vector3, text: String, color: Color, font_size: int) -> void:
+	var label := Label3D.new()
+	label.text = text
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
-	label.font_size = int(lerpf(48.0, 120.0, t))
+	label.font_size = font_size
 	label.pixel_size = 0.012
 	label.outline_size = 14
-	label.modulate = Color(0.5, 1.0, 0.55) if healing else Color(1, 1, 1).lerp(Color(1.0, 0.25, 0.1), t)
-	label.position = pos + Vector3(randf_range(-0.5, 0.5), 3.2, 0)
+	label.modulate = color
+	label.position = pos
 	add_child(label)
 	var tw := label.create_tween()
 	tw.tween_property(label, "position:y", label.position.y + 2.5, 0.9)
@@ -476,7 +539,7 @@ func _ping(point: Vector3) -> void:
 ## removed the moment they die, so the match plays their death for them.
 @rpc("authority", "call_local", "unreliable")
 func fx_death(pos: Vector3, unit_kind: String, team: int) -> void:
-	var big := unit_kind != "minion"
+	var big := unit_kind == "tower" or unit_kind == "core"
 	var color := Tune.team_color(team)
 	fx_slam(pos, 3.2 if big else 1.1, color.lightened(0.3))
 	for i in (16 if big else 7):

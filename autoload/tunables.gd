@@ -25,6 +25,7 @@ const BASE_DEPTH := 13.0     # paved base strip at each end of the single lane
 ##   cores / spawns   one position per team
 ##   towers  {team, lane, tier, pos}; tier 0 is the outer tower
 ##   nodes   junctions used to route around blocked ground
+##   camps   {pos, size} jungle monster camps; size is a key of MONSTERS
 ##   blocked sample points that must not be walkable (for the selftest)
 var maps := []
 var map_index := 0:          # set by Net.begin_match on every peer
@@ -89,6 +90,53 @@ const HEROES := [
 func hero_def(index: int) -> Dictionary:
 	return HEROES[clampi(index, 0, HEROES.size() - 1)]
 
+# --- Gold and items ------------------------------------------------------------
+const START_GOLD := 300
+const GOLD_PER_SEC := 2.0         # passive income for every hero
+const GOLD_MINION := 22           # to the hero landing the killing blow
+const GOLD_HERO := 200            # to the hero landing the killing blow
+const GOLD_TOWER := 150           # to every hero on the team that destroyed it
+const SELL_REFUND := 0.5          # share of the price returned when selling
+const ITEM_SLOTS := 6
+const CDR_MAX := 0.4
+
+## Bought at the team fountain (or while dead). Stats, all additive:
+##   hp      max health            regen     hp per second
+##   dmg     basic attack damage   haste     attack speed (0.25 = +25%)
+##   power   ability damage and healing (0.2 = +20%)
+##   cdr     cooldown reduction (0.15 = 15%, capped at CDR_MAX)
+##   speed   move speed            lifesteal share of basic attack damage healed
+const ITEMS := [
+	{"name": "Throat Lozenge", "cost": 250, "color": Color(0.45, 0.85, 0.5), "stats": {"hp": 150.0, "regen": 3.0}},
+	{"name": "Brass Knuckles", "cost": 300, "color": Color(0.9, 0.55, 0.3), "stats": {"dmg": 15.0}},
+	{"name": "Running Shoes", "cost": 300, "color": Color(0.5, 0.75, 1.0), "stats": {"speed": 1.0}},
+	{"name": "Metronome", "cost": 350, "color": Color(0.95, 0.85, 0.35), "stats": {"haste": 0.25}},
+	{"name": "Tuning Fork", "cost": 350, "color": Color(0.6, 0.9, 0.95), "stats": {"cdr": 0.15}},
+	{"name": "Amplifier", "cost": 400, "color": Color(0.8, 0.5, 1.0), "stats": {"power": 0.2}},
+	{"name": "Leech Reed", "cost": 600, "color": Color(0.9, 0.35, 0.45), "stats": {"dmg": 10.0, "lifesteal": 0.15}},
+	{"name": "Iron Lung", "cost": 700, "color": Color(0.3, 0.7, 0.4), "stats": {"hp": 400.0, "regen": 6.0}},
+	{"name": "War Drum", "cost": 750, "color": Color(0.85, 0.4, 0.2), "stats": {"dmg": 35.0, "haste": 0.15}},
+	{"name": "Stadium Speaker", "cost": 800, "color": Color(0.65, 0.35, 0.95), "stats": {"power": 0.45, "cdr": 0.1}},
+]
+
+
+## "+150 health, +3 health regen" for an item's tooltip and shop row.
+func item_text(index: int) -> String:
+	var parts := PackedStringArray()
+	var stats: Dictionary = ITEMS[index]["stats"]
+	for key: String in stats:
+		var v: float = stats[key]
+		match key:
+			"hp": parts.append("+%d health" % v)
+			"regen": parts.append("+%d health regen" % v)
+			"dmg": parts.append("+%d attack damage" % v)
+			"haste": parts.append("+%d%% attack speed" % roundi(v * 100.0))
+			"power": parts.append("+%d%% ability power" % roundi(v * 100.0))
+			"cdr": parts.append("%d%% cooldown reduction" % roundi(v * 100.0))
+			"speed": parts.append("+%.1f move speed" % v)
+			"lifesteal": parts.append("%d%% lifesteal" % roundi(v * 100.0))
+	return ", ".join(parts)
+
 # --- Minions / structures ------------------------------------------------------
 const WAVE_INTERVAL := 20.0
 const WAVE_SIZE := 3
@@ -103,6 +151,21 @@ const TOWER_RANGE := 9.0
 const TOWER_DMG := 45.0
 const TOWER_CD := 1.0
 const CORE_HP := 1500.0
+
+# --- Jungle monsters -------------------------------------------------------------
+## Neutral camps between the lanes (each map's "camps"). A monster stands at
+## its camp until a hero hits it, fights back until that hero dies or drags it
+## past its leash, then walks home and heals. The killing blow pays its gold.
+const NEUTRAL := 2                # team number of monsters
+const MONSTERS := {
+	"small": {"name": "Grumbler", "hp": 420.0, "dmg": 20.0, "cd": 1.1, "gold": 45, "scale": 1.0},
+	"big": {"name": "Howler", "hp": 1100.0, "dmg": 45.0, "cd": 1.3, "gold": 130, "scale": 1.6},
+}
+const MONSTER_RANGE := 1.6
+const MONSTER_SPEED := 5.5
+const MONSTER_LEASH := 11.0       # how far from its camp a monster will chase
+const MONSTER_REGEN := 0.2        # share of max hp per second once it gives up
+const MONSTER_RESPAWN := 45.0     # seconds after a camp is cleared
 
 
 func _init() -> void:
@@ -137,6 +200,7 @@ func _single_lane() -> Dictionary:
 			{"team": 1, "lane": 0, "tier": 0, "pos": _v(22, 0)},
 		],
 		"nodes": [],
+		"camps": [{"pos": _v(0, -8), "size": "small"}, {"pos": _v(0, 8), "size": "small"}],
 		"blocked": [],
 	}
 
@@ -188,6 +252,12 @@ func _three_lanes() -> Dictionary:
 		"spawns": [_v(-46, 46), _v(46, -46)],
 		"towers": towers,
 		"nodes": nodes,
+		# A Grumbler halfway along each jungle path, a Howler in each arm of the river.
+		"camps": [
+			{"pos": _v(-27, 3), "size": "small"}, {"pos": _v(-3, 27), "size": "small"},
+			{"pos": _v(27, -3), "size": "small"}, {"pos": _v(3, -27), "size": "small"},
+			{"pos": _v(-20, -20), "size": "big"}, {"pos": _v(20, 20), "size": "big"},
+		],
 		"blocked": [_v(-25, -12), _v(25, 12), _v(-5, -25)],
 	}
 
@@ -220,6 +290,8 @@ func _cache_map() -> void:
 
 ## Unit direction from a team's core toward the enemy core.
 func forward(team: int) -> Vector3:
+	if team > 1:
+		return Vector3(0, 0, 1)  # neutral monsters face the camera
 	var cores: Array = map()["cores"]
 	return (cores[1 - team] - cores[team]).normalized()
 
@@ -343,6 +415,8 @@ func route(from: Vector3, to: Vector3) -> Array:
 
 
 func team_color(team: int) -> Color:
+	if team > 1:
+		return Color(0.95, 0.7, 0.25)  # neutral
 	return Color(0.25, 0.55, 1.0) if team == 0 else Color(1.0, 0.32, 0.25)
 
 

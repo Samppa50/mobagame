@@ -24,6 +24,14 @@ func run_client(m: Node) -> void:
 	await tree.create_timer(1.6).timeout
 	if me != null:
 		print("SELFTEST client: hero hp=%.0f/%.0f pos=%s" % [me.hp, me.max_hp, me.position])
+	await tree.create_timer(3.4).timeout
+	# The host has killed and respawned us at the fountain with a full purse.
+	if me != null:
+		print("SELFTEST client: gold=%d deaths=%d can_shop=%s" % [me.gold, me.deaths, me.can_shop()])
+		me.cmd_buy.rpc_id(1, 7)
+	await tree.create_timer(0.6).timeout
+	if me != null:
+		print("SELFTEST client: after buying over the network items=%s gold=%d max_hp=%.0f" % [me.items, me.gold, me.max_hp])
 	await tree.create_timer(1.5).timeout
 	print("SELFTEST client: over=%s winner=%d my_team=%d" % [m.over, m.winner, Net.my_team()])
 
@@ -92,6 +100,33 @@ func run(m: Node) -> void:
 	check("in combat only the trickle remains", a.hp - fought < Tune.HERO_REGEN * 0.5, "+%.1f" % (a.hp - fought))
 	a.hp = a.max_hp
 
+	# Gold and the shop, while the host hero is still at its fountain.
+	check("heroes start with gold", a.gold >= Tune.START_GOLD and b.gold >= Tune.START_GOLD, "%d / %d" % [a.gold, b.gold])
+	var purse: int = a.gold
+	await tree.create_timer(1.1).timeout
+	check("passive income trickles in", a.gold > purse, "+%d" % (a.gold - purse))
+	a.gold = 0
+	a.cmd_buy(0)
+	check("cannot buy without the gold", a.items.is_empty())
+	var base_hp: float = a.max_hp
+	var base_dmg: float = a.atk_dmg
+	var price: int = Tune.ITEMS[0]["cost"] + Tune.ITEMS[1]["cost"]
+	a.gold = price + 7
+	a.cmd_buy(0)
+	a.cmd_buy(1)
+	check("buying at the fountain spends gold", a.items == [0, 1] and a.gold == 7, "items %s gold %d" % [a.items, a.gold])
+	check("items raise stats", is_equal_approx(a.max_hp, base_hp + Tune.ITEMS[0]["stats"]["hp"]) \
+		and is_equal_approx(a.atk_dmg, base_dmg + Tune.ITEMS[1]["stats"]["dmg"]), "hp %.0f dmg %.0f" % [a.max_hp, a.atk_dmg])
+	a.cmd_sell(0)
+	check("selling refunds part of the price", a.items == [1] and a.gold == 7 + int(Tune.ITEMS[0]["cost"] * Tune.SELL_REFUND) \
+		and is_equal_approx(a.max_hp, base_hp) and a.hp <= a.max_hp, "items %s gold %d" % [a.items, a.gold])
+	a.gold = 99999
+	for i in Tune.ITEM_SLOTS + 2:
+		a.cmd_buy(2)
+	check("inventory is capped", a.items.size() == Tune.ITEM_SLOTS, str(a.items))
+	a.items = []
+	a.gold = Tune.START_GOLD
+
 	# Multiplier mapping.
 	check("silent = x1", is_equal_approx(Tune.yell_multiplier(-80.0), 1.0))
 	check("threshold = x1", is_equal_approx(Tune.yell_multiplier(Tune.YELL_DB_MIN), 1.0))
@@ -124,6 +159,12 @@ func run(m: Node) -> void:
 	check("minion damage is not scaled", is_equal_approx(md, 10.0), "got %.1f" % md)
 	minion.queue_free()
 
+	# Bounties: the killing blow on a minion or a hero pays the killer.
+	var prey: Unit = m.host_spawn("minion", b.team, a.position)
+	purse = a.gold
+	m.deal_damage(a, prey, 99999.0)
+	check("minion kill pays a bounty", a.gold == purse + Tune.GOLD_MINION and a.cs == 1, "+%d" % (a.gold - purse))
+
 	# Loudness expires after the window.
 	await tree.create_timer(Tune.YELL_WINDOW_MS / 1000.0 + 0.15).timeout
 	# (A live microphone on the host can legitimately keep this above x1.)
@@ -133,6 +174,39 @@ func run(m: Node) -> void:
 	await tree.create_timer(1.0).timeout
 	check("client move command moved its hero", b.position.distance_to(b_start) > 1.0, str(b.position))
 
+	# Jungle monsters: one per camp, ignored by minions, and they fight back
+	# only once a hero hits them. The killing blow pays the camp's gold.
+	var monsters := []
+	for u in m.units.get_children():
+		if u.kind == "monster":
+			monsters.append(u)
+	check("a monster stands at every camp", monsters.size() == Tune.map()["camps"].size(), "%d" % monsters.size())
+	var beast: Unit = monsters[0]
+	var walker: Unit = m.host_spawn("minion", a.team, beast.position + Vector3(1.5, 0, 0))
+	check("minions ignore monsters", walker.nearest_enemy(Tune.MINION_AGGRO) != beast)
+	walker.queue_free()
+	var a_home := a.position
+	a.position = beast.position + Vector3(2.0, 0, 0)
+	a.hp = a.max_hp
+	await tree.create_timer(0.4).timeout
+	check("an unprovoked monster leaves heroes alone", is_equal_approx(a.hp, a.max_hp))
+	m.deal_damage(a, beast, 10.0)
+	await tree.create_timer(0.4).timeout
+	check("a provoked monster fights back", a.hp < a.max_hp - beast.spec["dmg"] * 0.5, "hp %.0f" % a.hp)
+	purse = a.gold
+	m.deal_damage(a, beast, 99999.0)
+	check("monster kill pays its gold", a.gold == purse + beast.spec["gold"], "+%d" % (a.gold - purse))
+	a.position = a_home
+	a.hp = a.max_hp
+
+	# A hero kill pays too. The victim respawns at its fountain, rich enough
+	# for the client to buy something over the network.
+	purse = a.gold
+	m.deal_damage(a, b, 99999.0)
+	check("hero kill pays a bounty", a.gold == purse + Tune.GOLD_HERO and a.kills == 1 and b.deaths == 1 and b.dead, "+%d" % (a.gold - purse))
+	b.gold = 5000
+	b._respawn()
+
 	# Command path: host hero attacks via the same call the input code uses.
 	a.position = b.position + Vector3(3, 0, 0)
 	b.hp = b.max_hp
@@ -140,6 +214,9 @@ func run(m: Node) -> void:
 	await tree.create_timer(1.2).timeout
 	check("attack command damages target", b.hp < b.max_hp - a.def["dmg"] * 0.7, "hp %.0f" % b.hp)
 	check("enemy hero in sight is revealed", not b.fogged)
+	a.gold = 5000
+	a.cmd_buy(0)
+	check("shop is closed away from the fountain", a.items.is_empty() and a.gold == 5000)
 
 	# The first wave is out by now: every lane has minions from both teams.
 	var seen := {}
@@ -196,6 +273,8 @@ func check_geometry() -> void:
 		var placed: Array = m["cores"] + m["spawns"] + m["nodes"]
 		for t: Dictionary in m["towers"]:
 			placed.append(t["pos"])
+		for camp: Dictionary in m["camps"]:
+			placed.append(camp["pos"])
 		for lane: Array in m["lanes"]:
 			placed.append_array(lane)
 		var grounded := true

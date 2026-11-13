@@ -1,4 +1,4 @@
-## Minion, Tower and Core live in one file as inner classes of this script.
+## Minion, Monster, Tower and Core live in one file as inner classes of this script.
 ## (Kept together because each is only a few lines of host AI.)
 class_name Structures
 extends RefCounted
@@ -83,6 +83,71 @@ class Minion extends Unit:
 			_path = Tune.route(position, goal)
 		if step_toward(_path[0], Tune.MINION_SPEED, delta) and _path.size() > 1:
 			_path.pop_front()
+
+
+## Neutral jungle monster: idle at its camp until a hero provokes it.
+class Monster extends Unit:
+	var spec := {}
+	var _home := Vector3.ZERO
+	var _foe: Unit = null
+
+	func _configure() -> void:
+		spec = Tune.MONSTERS[spawn_data.get("size", "small")]
+		var s: float = spec["scale"]
+		max_hp = spec["hp"]
+		radius = 0.75 * s
+		mobile = true
+		hop = 0.25
+		bar_height = 2.3 * s
+		_home = position
+		var hide := Color(0.5, 0.36, 0.62) if s > 1.2 else Color(0.42, 0.5, 0.3)
+		var body := SphereMesh.new()
+		body.radius = 0.8 * s
+		body.height = 1.5 * s
+		add_body(body, 0.75 * s, hide)
+		var head := SphereMesh.new()
+		head.radius = 0.45 * s
+		head.height = 0.8 * s
+		add_body(head, 1.5 * s, hide.lightened(0.15)).position.z = -0.35 * s
+		var horn := CylinderMesh.new()
+		horn.top_radius = 0.0
+		horn.bottom_radius = 0.13 * s
+		horn.height = 0.6 * s
+		var eye := SphereMesh.new()
+		eye.radius = 0.09 * s
+		eye.height = 0.18 * s
+		for x in [-1.0, 1.0]:
+			var h := add_body(horn, 2.0 * s, Color(0.9, 0.87, 0.75))
+			h.position.x = x * 0.3 * s
+			h.position.z = -0.3 * s
+			h.rotation_degrees.z = -x * 25.0
+			var e := add_body(eye, 1.58 * s, Tune.team_color(team), 2.5)
+			e.position.x = x * 0.18 * s
+			e.position.z = -0.75 * s
+
+	## Called by the match when a hero damages this monster.
+	func provoke(by: Unit) -> void:
+		if _foe == null or not is_instance_valid(_foe):
+			_foe = by
+
+	func host_tick(delta: float) -> void:
+		_atk_cd = maxf(0.0, _atk_cd - delta)
+		if _foe != null and (not is_instance_valid(_foe) or not _foe.targetable() \
+				or Vector2(_foe.position.x - _home.x, _foe.position.z - _home.z).length() > Tune.MONSTER_LEASH):
+			_foe = null
+		if _foe == null:
+			# Given up (or never bothered): walk home and recover.
+			hp = minf(max_hp, hp + max_hp * Tune.MONSTER_REGEN * delta)
+			if position.distance_to(_home) > 0.05:
+				step_toward(Tune.route(position, _home)[0], Tune.MONSTER_SPEED, delta)
+		elif flat_dist(_foe) <= Tune.MONSTER_RANGE + radius + _foe.radius:
+			if _atk_cd <= 0.0:
+				_atk_cd = spec["cd"]
+				play_anim.rpc("attack", _foe.position)
+				match_node().deal_damage(self, _foe, spec["dmg"])
+		else:
+			step_toward(Tune.route(position, _foe.position)[0], Tune.MONSTER_SPEED, delta)
+		net_pos = position
 
 
 class Tower extends Unit:

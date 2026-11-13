@@ -80,7 +80,7 @@ func _draw() -> void:
 		return
 	var me = match_node.my_hero()
 	# Draw small things first so heroes stay on top.
-	for pass_kind in ["minion", "tower", "core", "hero"]:
+	for pass_kind in ["minion", "monster", "tower", "core", "hero"]:
 		for u in match_node.units.get_children():
 			if u.kind != pass_kind or u.dead or u.fogged:
 				continue
@@ -89,6 +89,9 @@ func _draw() -> void:
 			match pass_kind:
 				"minion":
 					draw_circle(p, 2.5, c)
+				"monster":
+					draw_circle(p, 2.2 + u.radius * 2.0, Color.BLACK)
+					draw_circle(p, 1.2 + u.radius * 2.0, c)
 				"tower":
 					draw_rect(Rect2(p - Vector2(5, 5), Vector2(10, 10)), c)
 					draw_rect(Rect2(p - Vector2(5, 5), Vector2(10, 10)), Color.BLACK, false, 1.5)

@@ -149,7 +149,7 @@ func nearest_enemy(max_range: float, only_kind := "") -> Unit:
 	var best: Unit = null
 	var best_d := INF
 	for u in get_parent().get_children():
-		if u.team == team or not u.targetable():
+		if u.team == team or u.team == Tune.NEUTRAL or not u.targetable():
 			continue
 		if only_kind != "" and u.kind != only_kind:
 			continue
