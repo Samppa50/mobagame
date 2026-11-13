@@ -9,3 +9,6 @@ Thumbs.db
 # Temp files
 *.TMP
 *.tmp
+
+# Temporary copies Godot makes of loaded extension DLLs
+~*.dll
