@@ -13,6 +13,8 @@ const CAM_EDGE := 10.0    # pixels from a screen edge that start a pan
 var free_cam := false     # local: camera detached from the hero (toggled with Y)
 var cam_focus := Vector3.ZERO  # ground point the camera looks at
 var _mouse_inside := true
+var show_range := false   # local: ring showing our hero's basic attack range (toggled with R)
+var _range_ring: MeshInstance3D
 
 var over := false
 var winner := -1
@@ -396,6 +398,8 @@ func mouse_ground() -> Vector3:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_Y:
 		free_cam = not free_cam
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_R:
+		show_range = not show_range
 	var hero := my_hero()
 	if hero == null or hero.dead or over:
 		return
@@ -451,6 +455,14 @@ func _process(delta: float) -> void:
 	if not over:
 		clock += delta
 	_move_camera(hero, delta)
+	if _range_ring == null:
+		var ring := TorusMesh.new()
+		ring.outer_radius = hero.def["range"]
+		ring.inner_radius = ring.outer_radius - 0.12
+		_range_ring = _glow(ring, Color(1, 1, 1))
+		_range_ring.scale.y = 0.2
+	_range_ring.visible = show_range and not hero.dead
+	_range_ring.position = hero.position + Vector3(0, 0.12, 0)
 	# Ears on the hero, not the camera, so voice volume follows hero distance.
 	if _listener == null or not is_instance_valid(_listener):
 		_listener = AudioListener3D.new()

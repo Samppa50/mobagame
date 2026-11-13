@@ -44,6 +44,7 @@ var _hp_text: Label
 var _xp: ProgressBar
 var _xp_text: Label
 var _cam_note: Label
+var _range: Button
 var _yell: ProgressBar
 var _yell_text: Label
 var _center: Label
@@ -90,7 +91,7 @@ func _ready() -> void:
 	minimap.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	minimap.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
-	var help := _label("Right-click: move / attack    Q, W: abilities (aim with mouse)    B: shop    Y: free camera    F3: hear yourself" \
+	var help := _label("Right-click: move / attack    Q, W: abilities (aim with mouse)    B: shop    R: attack range    Y: free camera    F3: hear yourself" \
 		+ ("    V: fake yell (local test)" if Net.dev_mode else ""), 13, Color(1, 1, 1, 0.5))
 	help.position = Vector2(12, 8)
 	root.add_child(help)
@@ -162,6 +163,15 @@ func _build_panel(root: Control) -> void:
 	left.add_child(_role)
 	_stats = _label("", 12, Color(0.85, 0.88, 0.95))
 	left.add_child(_stats)
+	_range = Button.new()
+	_range.text = "Range [R]"
+	_range.tooltip_text = "Show your basic attack range as a ring around your hero."
+	_range.toggle_mode = true
+	_range.focus_mode = Control.FOCUS_NONE
+	_range.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_range.add_theme_font_size_override("font_size", 12)
+	_range.toggled.connect(func(on: bool): match_node.show_range = on)
+	left.add_child(_range)
 
 	# Middle: yell meter, health, abilities.
 	var mid := VBoxContainer.new()
@@ -351,6 +361,7 @@ func _process(_delta: float) -> void:
 	_yell_text.text = "YELL  x%.1f" % mult
 	_fps.text = "%d FPS" % Engine.get_frames_per_second()
 	_cam_note.visible = match_node.free_cam
+	_range.set_pressed_no_signal(match_node.show_range)
 	var score := [0, 0]
 	if match_node.units != null:
 		for u in match_node.units.get_children():
