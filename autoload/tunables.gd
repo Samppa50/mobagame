@@ -90,6 +90,27 @@ const HEROES := [
 func hero_def(index: int) -> Dictionary:
 	return HEROES[clampi(index, 0, HEROES.size() - 1)]
 
+# --- Levels and experience -------------------------------------------------------
+## When a unit dies, its xp is split between the heroes of the side that
+## killed it standing within XP_RANGE (the hero who struck the blow always
+## shares). A fallen tower gives its xp to every hero on the enemy team.
+const MAX_LEVEL := 10
+const XP_BASE := 100.0            # xp from level 1 to 2
+const XP_STEP := 60.0             # extra xp needed for each level after that
+const XP_RANGE := 16.0
+const XP_MINION := 30.0
+const XP_HERO := 120.0
+const XP_HERO_PER_LEVEL := 30.0   # extra for each level of the victim
+const XP_TOWER := 150.0
+const LEVEL_HP := 0.08            # share of base health gained per level
+const LEVEL_DMG := 0.06           # share of base attack damage gained per level
+const LEVEL_POWER := 0.05         # ability power gained per level
+const RESPAWN_PER_LEVEL := 1.5    # seconds added to the respawn timer per level
+
+
+func xp_needed(level: int) -> float:
+	return XP_BASE + XP_STEP * (level - 1)
+
 # --- Gold and items ------------------------------------------------------------
 const START_GOLD := 300
 const GOLD_PER_SEC := 2.0         # passive income for every hero
@@ -158,8 +179,8 @@ const CORE_HP := 1500.0
 ## past its leash, then walks home and heals. The killing blow pays its gold.
 const NEUTRAL := 2                # team number of monsters
 const MONSTERS := {
-	"small": {"name": "Grumbler", "hp": 420.0, "dmg": 20.0, "cd": 1.1, "gold": 45, "scale": 1.0},
-	"big": {"name": "Howler", "hp": 1100.0, "dmg": 45.0, "cd": 1.3, "gold": 130, "scale": 1.6},
+	"small": {"name": "Grumbler", "hp": 420.0, "dmg": 20.0, "cd": 1.1, "gold": 45, "xp": 60.0, "scale": 1.0},
+	"big": {"name": "Howler", "hp": 1100.0, "dmg": 45.0, "cd": 1.3, "gold": 130, "xp": 160.0, "scale": 1.6},
 }
 const MONSTER_RANGE := 1.6
 const MONSTER_SPEED := 5.5

@@ -7,6 +7,12 @@ var spawner: MultiplayerSpawner
 var camera: Camera3D
 var hud: CanvasLayer
 const CAM_OFFSET := Vector3(0, 27, 17)
+const CAM_SPEED := 45.0   # free cam pan speed, world units per second
+const CAM_EDGE := 10.0    # pixels from a screen edge that start a pan
+
+var free_cam := false     # local: camera detached from the hero (toggled with Y)
+var cam_focus := Vector3.ZERO  # ground point the camera looks at
+var _mouse_inside := true
 
 var over := false
 var winner := -1
@@ -290,20 +296,24 @@ func _host_kill(target: Unit, source: Unit) -> void:
 	var killer: Hero = source as Hero
 	match target.kind:
 		"hero":
+			_share_xp(target, source, Tune.XP_HERO + Tune.XP_HERO_PER_LEVEL * target.level)
 			if killer != null:
 				killer.kills += 1
 				killer.earn(Tune.GOLD_HERO)
 		"minion":
+			_share_xp(target, source, Tune.XP_MINION)
 			if killer != null:
 				killer.cs += 1
 				killer.earn(Tune.GOLD_MINION)
 		"monster":
+			_share_xp(target, source, target.spec["xp"])
 			if killer != null:
 				killer.earn(target.spec["gold"])
 		"tower":
 			for u in units.get_children():
 				if u is Hero and u.team != target.team:
 					u.earn(Tune.GOLD_TOWER)
+					u.add_xp(Tune.XP_TOWER)
 	match target.kind:
 		"hero":
 			target.host_die()
@@ -317,6 +327,19 @@ func _host_kill(target: Unit, source: Unit) -> void:
 			target.dead = true
 			fx_death.rpc(target.position, target.kind, target.team)
 			target.queue_free()
+
+
+## Splits a dying unit's xp between the living heroes of the side that killed
+## it who are close enough to have been part of the fight. A hero who struck
+## the blow from further away still shares.
+func _share_xp(target: Unit, source: Unit, amount: float) -> void:
+	var sharers := []
+	for u in units.get_children():
+		if u is Hero and u.team == source.team and not u.dead \
+				and (u == source or u.flat_dist(target) <= Tune.XP_RANGE):
+			sharers.append(u)
+	for hero: Hero in sharers:
+		hero.add_xp(amount / sharers.size())
 
 
 func host_fire_shot(hero: Hero, dir: Vector3, spec: Dictionary) -> void:
@@ -371,6 +394,8 @@ func mouse_ground() -> Vector3:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_Y:
+		free_cam = not free_cam
 	var hero := my_hero()
 	if hero == null or hero.dead or over:
 		return
@@ -425,13 +450,57 @@ func _process(delta: float) -> void:
 		return
 	if not over:
 		clock += delta
-	camera.position = hero.position + CAM_OFFSET
+	_move_camera(hero, delta)
 	# Ears on the hero, not the camera, so voice volume follows hero distance.
 	if _listener == null or not is_instance_valid(_listener):
 		_listener = AudioListener3D.new()
 		_listener.position.y = 1.6
 		hero.add_child(_listener)
 		_listener.make_current()
+
+
+## The camera follows the hero unless free cam is on (Y). In free cam it pans
+## with the arrow keys or by pushing the mouse against a screen edge, and
+## holding Space brings it back to the hero.
+func _move_camera(hero: Hero, delta: float) -> void:
+	if not free_cam or Input.is_key_pressed(KEY_SPACE):
+		cam_focus = hero.position
+	elif get_window().has_focus():
+		var pan := Vector2.ZERO
+		if Input.is_key_pressed(KEY_LEFT):
+			pan.x -= 1.0
+		if Input.is_key_pressed(KEY_RIGHT):
+			pan.x += 1.0
+		if Input.is_key_pressed(KEY_UP):
+			pan.y -= 1.0
+		if Input.is_key_pressed(KEY_DOWN):
+			pan.y += 1.0
+		if _mouse_inside:
+			var mouse := get_viewport().get_mouse_position()
+			var view := get_viewport().get_visible_rect().size
+			if mouse.x <= CAM_EDGE:
+				pan.x -= 1.0
+			elif mouse.x >= view.x - CAM_EDGE:
+				pan.x += 1.0
+			if mouse.y <= CAM_EDGE:
+				pan.y -= 1.0
+			elif mouse.y >= view.y - CAM_EDGE:
+				pan.y += 1.0
+		look_at_point(cam_focus + Vector3(pan.x, 0.0, pan.y).limit_length(1.0) * CAM_SPEED * delta)
+	camera.position = cam_focus + CAM_OFFSET
+
+
+## Free cam: centre the view on a world point (also used by the minimap).
+func look_at_point(point: Vector3) -> void:
+	var m := Tune.map()
+	cam_focus = Vector3(clampf(point.x, -m["half_len"], m["half_len"]), 0.0, clampf(point.z, -m["half_wid"], m["half_wid"]))
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_MOUSE_ENTER:
+		_mouse_inside = true
+	elif what == NOTIFICATION_WM_MOUSE_EXIT:
+		_mouse_inside = false
 
 
 # --- Effects (visual only, run on every peer) ------------------------------------------
@@ -450,6 +519,13 @@ func fx_damage(pos: Vector3, amount: float, mult: float) -> void:
 @rpc("authority", "call_local", "reliable")
 func fx_gold(pos: Vector3, amount: int) -> void:
 	_float_text(pos + Vector3(0, 4.6, 0), "+%d g" % amount, Color(1.0, 0.84, 0.25), 56)
+
+
+## A hero reached a new level.
+@rpc("authority", "call_local", "reliable")
+func fx_level(pos: Vector3, level: int) -> void:
+	fx_slam(pos, 2.4, Color(1.0, 0.9, 0.4))
+	_float_text(pos + Vector3(0, 5.4, 0), "LEVEL %d" % level, Color(1.0, 0.9, 0.4), 72)
 
 
 func _float_text(pos: Vector3, text: String, color: Color, font_size: int) -> void:

@@ -33,7 +33,9 @@ func run_client(m: Node) -> void:
 	if me != null:
 		print("SELFTEST client: after buying over the network items=%s gold=%d max_hp=%.0f" % [me.items, me.gold, me.max_hp])
 	await tree.create_timer(1.5).timeout
-	print("SELFTEST client: over=%s winner=%d my_team=%d" % [m.over, m.winner, Net.my_team()])
+	var host_hero: Hero = m.hero_for(1)
+	print("SELFTEST client: over=%s winner=%d my_team=%d host hero level=%d max_hp=%.0f" % [
+		m.over, m.winner, Net.my_team(), host_hero.level, host_hero.max_hp])
 
 
 ## Solo host (--autostart=1): cast both abilities of the picked hero.
@@ -90,6 +92,16 @@ func run(m: Node) -> void:
 	# Fog of war (local to this peer) and regeneration, while both heroes
 	# still stand at their own fountains on opposite sides of the map.
 	check("distant enemy hero is hidden by fog", b.fogged and not a.fogged)
+	# Vision is shared by the whole team: anything an ally sees, we see.
+	var scout: Unit = m.host_spawn("minion", a.team, b.position + Vector3(3, 0, 0))
+	await tree.process_frame
+	await tree.process_frame
+	check("an ally's sight reveals the enemy (shared team vision)", not b.fogged)
+	scout.queue_free()
+	await tree.process_frame
+	await tree.process_frame
+	check("the enemy is hidden again once no ally sees it", b.fogged)
+	b.hp = b.max_hp
 	a.hp = 100.0
 	a._calm = Tune.CALM_AFTER
 	await tree.create_timer(0.5).timeout
@@ -164,6 +176,28 @@ func run(m: Node) -> void:
 	purse = a.gold
 	m.deal_damage(a, prey, 99999.0)
 	check("minion kill pays a bounty", a.gold == purse + Tune.GOLD_MINION and a.cs == 1, "+%d" % (a.gold - purse))
+
+	# Experience: earned by being near a kill, not only by landing it.
+	check("minion kill gives xp", a.level == 1 and is_equal_approx(a.xp, Tune.XP_MINION), "xp %.0f" % a.xp)
+	var ally: Unit = m.host_spawn("minion", a.team, a.position)
+	var far: Unit = m.host_spawn("minion", b.team, a.position + Vector3(Tune.XP_RANGE + 5.0, 0, 0))
+	m.deal_damage(ally, far, 99999.0)
+	check("no xp for a kill out of range", is_equal_approx(a.xp, Tune.XP_MINION), "xp %.0f" % a.xp)
+	var near: Unit = m.host_spawn("minion", b.team, a.position + Vector3(2, 0, 0))
+	m.deal_damage(ally, near, 99999.0)
+	check("xp for a nearby kill by an ally", is_equal_approx(a.xp, Tune.XP_MINION * 2.0) and a.cs == 1, "xp %.0f" % a.xp)
+	ally.queue_free()
+	var hp_1: float = a.max_hp
+	var dmg_1: float = a.atk_dmg
+	a.hp = 100.0
+	a.add_xp(Tune.xp_needed(1) + Tune.xp_needed(2) - a.xp + 5.0)
+	check("enough xp gains levels and keeps the remainder", a.level == 3 and is_equal_approx(a.xp, 5.0), "level %d xp %.0f" % [a.level, a.xp])
+	check("levels raise health and attack damage", is_equal_approx(a.max_hp, hp_1 + a.def["hp"] * Tune.LEVEL_HP * 2.0) \
+		and a.atk_dmg > dmg_1 and a.hp > 100.0, "hp %.0f/%.0f dmg %.1f" % [a.hp, a.max_hp, a.atk_dmg])
+	a.add_xp(999999.0)
+	check("level is capped", a.level == Tune.MAX_LEVEL and is_zero_approx(a.xp), "level %d" % a.level)
+	a.level = 1
+	a.hp = a.max_hp
 
 	# Loudness expires after the window.
 	await tree.create_timer(Tune.YELL_WINDOW_MS / 1000.0 + 0.15).timeout

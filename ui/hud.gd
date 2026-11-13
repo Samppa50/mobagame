@@ -41,6 +41,9 @@ var match_node: Node
 
 var _hp: ProgressBar
 var _hp_text: Label
+var _xp: ProgressBar
+var _xp_text: Label
+var _cam_note: Label
 var _yell: ProgressBar
 var _yell_text: Label
 var _center: Label
@@ -87,7 +90,7 @@ func _ready() -> void:
 	minimap.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	minimap.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
-	var help := _label("Right-click: move / attack    Q, W: abilities (aim with mouse)    B: shop    F3: hear yourself" \
+	var help := _label("Right-click: move / attack    Q, W: abilities (aim with mouse)    B: shop    Y: free camera    F3: hear yourself" \
 		+ ("    V: fake yell (local test)" if Net.dev_mode else ""), 13, Color(1, 1, 1, 0.5))
 	help.position = Vector2(12, 8)
 	root.add_child(help)
@@ -129,6 +132,12 @@ func _build_top(root: Control) -> void:
 	_kda = _label("", 13, Color(1, 1, 1, 0.75))
 	_kda.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(_kda)
+	_cam_note = _label("FREE CAMERA    arrows / screen edge: pan    Space: back to hero    Y: lock", 13, Color(1.0, 0.9, 0.5))
+	_cam_note.add_theme_constant_override("outline_size", 4)
+	_cam_note.add_theme_color_override("font_outline_color", Color.BLACK)
+	root.add_child(_cam_note)
+	_cam_note.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP, Control.PRESET_MODE_MINSIZE, 108)
+	_cam_note.grow_horizontal = Control.GROW_DIRECTION_BOTH
 
 
 ## Bottom centre: who you are, bars and abilities, items and gold.
@@ -167,6 +176,9 @@ func _build_panel(root: Control) -> void:
 	_hp = _bar(Color(0.25, 0.75, 0.3), 24)
 	_hp_text = _bar_text(_hp, 14)
 	mid.add_child(_hp)
+	_xp = _bar(Color(0.6, 0.45, 0.95), 12)
+	_xp_text = _bar_text(_xp, 10)
+	mid.add_child(_xp)
 	var cast := HBoxContainer.new()
 	cast.add_theme_constant_override("separation", 6)
 	mid.add_child(cast)
@@ -338,6 +350,7 @@ func _process(_delta: float) -> void:
 	_yell.value = mult
 	_yell_text.text = "YELL  x%.1f" % mult
 	_fps.text = "%d FPS" % Engine.get_frames_per_second()
+	_cam_note.visible = match_node.free_cam
 	var score := [0, 0]
 	if match_node.units != null:
 		for u in match_node.units.get_children():
@@ -361,7 +374,11 @@ func _process(_delta: float) -> void:
 		return
 
 	_kda.text = "%d kills    %d deaths    %d minions" % [hero.kills, hero.deaths, hero.cs]
-	_name.text = hero.def["name"]
+	_name.text = "%s  Lv %d" % [hero.def["name"], hero.level]
+	var capped: bool = hero.level >= Tune.MAX_LEVEL
+	_xp.max_value = Tune.xp_needed(hero.level)
+	_xp.value = _xp.max_value if capped else hero.xp
+	_xp_text.text = "MAX LEVEL" if capped else "XP  %d / %d" % [hero.xp, Tune.xp_needed(hero.level)]
 	_role.text = hero.def["role"]
 	_stats.text = "Attack  %d   (%.2f/s)\nPower  %d%%   CDR  %d%%\nSpeed  %.1f   Range  %.1f" % [
 		hero.atk_dmg, 1.0 / hero.atk_interval, roundi(hero.power * 100.0), roundi(hero.cdr * 100.0),

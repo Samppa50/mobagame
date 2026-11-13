@@ -11,6 +11,15 @@ var gold := 0
 var kills := 0
 var deaths := 0
 var cs := 0               # minions killed
+var xp := 0.0             # progress toward the next level
+var level := 1:           # replicated; raises health, attack damage and ability power
+	set(value):
+		if value == level:
+			return
+		level = value
+		_apply_items()
+		if _tag != null:
+			_tag.text = "%s  [%d]" % [_title, level]
 var items: Array = []:    # indices into Tune.ITEMS; replicated, so every peer derives the stats
 	set(value):
 		items = value
@@ -34,7 +43,9 @@ var _punch := 0
 var _calm := 0.0          # host: seconds since this hero last dealt or took damage
 var _target: Unit = null
 var _voice: AudioStreamPlayer3D
-var _gold_frac := 0.0     # host: passive income not yet paid out as whole gold
+var _tag: Label3D         # name and level above the hero
+var _title := ""
+var _gold_frac := 0.0    # host: passive income not yet paid out as whole gold
 
 
 func _configure() -> void:
@@ -46,7 +57,9 @@ func _configure() -> void:
 	bar_height = 3.3
 	_build_look()
 	var label := Label3D.new()
-	label.text = str(Net.players.get(peer_id, {}).get("name", "Player"))
+	_title = str(Net.players.get(peer_id, {}).get("name", "Player"))
+	label.text = "%s  [%d]" % [_title, level]
+	_tag = label
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
 	label.font_size = 40
@@ -161,25 +174,26 @@ func _anim(anim: String) -> void:
 
 
 func _sync_props() -> Array:
-	return ["net_pos", "hp", "dead", "cd_q", "cd_w", "respawn_left", "gold", "items", "kills", "deaths", "cs"]
+	return ["net_pos", "hp", "dead", "cd_q", "cd_w", "respawn_left", "gold", "items", "kills", "deaths", "cs", "xp", "level"]
 
 
 # --- Items ---------------------------------------------------------------------
 
-## Rebuilds every stat from the hero definition plus the items held.
+## Rebuilds every stat from the hero definition, the level and the items held.
 func _apply_items() -> void:
 	if def.is_empty():
 		return
+	var grown := level - 1
 	var sum := {}
 	for index: int in items:
 		var stats: Dictionary = Tune.ITEMS[index]["stats"]
 		for key: String in stats:
 			sum[key] = sum.get(key, 0.0) + stats[key]
-	max_hp = def["hp"] + sum.get("hp", 0.0)
-	atk_dmg = def["dmg"] + sum.get("dmg", 0.0)
+	max_hp = def["hp"] * (1.0 + Tune.LEVEL_HP * grown) + sum.get("hp", 0.0)
+	atk_dmg = def["dmg"] * (1.0 + Tune.LEVEL_DMG * grown) + sum.get("dmg", 0.0)
 	atk_interval = def["atk_cd"] / (1.0 + sum.get("haste", 0.0))
 	move_speed = def["speed"] + sum.get("speed", 0.0)
-	power = 1.0 + sum.get("power", 0.0)
+	power = 1.0 + Tune.LEVEL_POWER * grown + sum.get("power", 0.0)
 	cdr = minf(Tune.CDR_MAX, sum.get("cdr", 0.0))
 	regen_bonus = sum.get("regen", 0.0)
 	lifesteal = sum.get("lifesteal", 0.0)
@@ -196,6 +210,23 @@ func can_shop() -> bool:
 		return true
 	var fountain: Vector3 = Tune.map()["spawns"][team]
 	return Vector2(position.x - fountain.x, position.z - fountain.z).length() <= Tune.FOUNTAIN_RADIUS
+
+
+## Host: grant experience, levelling up as many times as it covers. Each level
+## also restores the health it adds.
+func add_xp(amount: float) -> void:
+	if level >= Tune.MAX_LEVEL:
+		return
+	xp += amount
+	while level < Tune.MAX_LEVEL and xp >= Tune.xp_needed(level):
+		xp -= Tune.xp_needed(level)
+		var before := max_hp
+		level += 1
+		if not dead:
+			hp += max_hp - before
+		match_node().fx_level.rpc(position, level)
+	if level >= Tune.MAX_LEVEL:
+		xp = 0.0
 
 
 ## Host: pay this hero, with a floating "+N" only its player sees.
@@ -367,7 +398,7 @@ func host_tick(delta: float) -> void:
 func host_die() -> void:
 	dead = true
 	deaths += 1
-	respawn_left = Tune.HERO_RESPAWN
+	respawn_left = Tune.HERO_RESPAWN + Tune.RESPAWN_PER_LEVEL * (level - 1)
 	_target = null
 	_path = []
 

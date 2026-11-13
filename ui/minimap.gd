@@ -1,5 +1,6 @@
 extends Control
-## Bottom-right minimap of the current map. Right- or left-click it to walk there.
+## Bottom-right minimap of the current map. Click it to walk there (or, in free
+## cam, left-click to look there).
 
 const MAX_SIZE := Vector2(320, 230)  # pixels; the scale shrinks to fit bigger maps
 const PAD := 6.0
@@ -32,10 +33,18 @@ func to_world(point: Vector2) -> Vector3:
 	return Vector3(p.x, 0.0, p.y)
 
 
+## Right-click walks there. Left-click does too, except in free cam, where
+## clicking or dragging with the left button moves the camera instead.
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed \
 			and (event.button_index == MOUSE_BUTTON_RIGHT or event.button_index == MOUSE_BUTTON_LEFT):
-		match_node.order_move(to_world(event.position))
+		if match_node.free_cam and event.button_index == MOUSE_BUTTON_LEFT:
+			match_node.look_at_point(to_world(event.position))
+		else:
+			match_node.order_move(to_world(event.position))
+		accept_event()
+	elif event is InputEventMouseMotion and match_node.free_cam and event.button_mask & MOUSE_BUTTON_MASK_LEFT:
+		match_node.look_at_point(to_world(event.position))
 		accept_event()
 
 
@@ -104,5 +113,5 @@ func _draw() -> void:
 	# Where the main camera is looking.
 	if me != null:
 		var view := Vector2(56.0, 30.0) * _scale
-		var centre := to_map(me.position)
+		var centre := to_map(match_node.cam_focus)
 		draw_rect(Rect2(centre - view * 0.5, view).intersection(Rect2(Vector2.ZERO, size)), Color(1, 1, 1, 0.5), false, 1.0)
