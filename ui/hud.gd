@@ -45,6 +45,8 @@ var _xp: ProgressBar
 var _xp_text: Label
 var _cam_note: Label
 var _range: Button
+var _board: PanelContainer
+var _board_text: RichTextLabel
 var _yell: ProgressBar
 var _yell_text: Label
 var _center: Label
@@ -72,6 +74,7 @@ func _ready() -> void:
 	_build_top(root)
 	_build_panel(root)
 	_build_shop(root)
+	_build_board(root)
 
 	_center = Label.new()
 	_center.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -91,7 +94,7 @@ func _ready() -> void:
 	minimap.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	minimap.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
-	var help := _label("Right-click: move / attack    Q, W: abilities (aim with mouse)    B: shop    R: attack range    Y: free camera    F3: hear yourself" \
+	var help := _label("Right-click: move / attack    Q, W: abilities (aim with mouse)    B: shop    R: attack range    Y: free camera    Tab: scoreboard    F3: hear yourself" \
 		+ ("    V: fake yell (local test)" if Net.dev_mode else ""), 13, Color(1, 1, 1, 0.5))
 	help.position = Vector2(12, 8)
 	root.add_child(help)
@@ -361,6 +364,10 @@ func _process(_delta: float) -> void:
 	_yell_text.text = "YELL  x%.1f" % mult
 	_fps.text = "%d FPS" % Engine.get_frames_per_second()
 	_cam_note.visible = match_node.free_cam
+	_board.visible = Input.is_key_pressed(KEY_TAB) or match_node.over
+	_center.visible = not _board.visible  # the board carries the result itself
+	if _board.visible:
+		_refresh_board()
 	_range.set_pressed_no_signal(match_node.show_range)
 	var score := [0, 0]
 	if match_node.units != null:
@@ -464,3 +471,64 @@ func _ability_text(hero: Hero, spec: Dictionary, slot: int) -> String:
 			scaled = false
 	return "%s\n%s\nCooldown %.1f s.%s" % [spec["name"], what, hero.cooldown(slot),
 		" Yelling multiplies it." if scaled else ""]
+
+
+# --- Scoreboard ----------------------------------------------------------------------
+
+## Centre of the screen while Tab is held, and once the match is over.
+func _build_board(root: Control) -> void:
+	_board = _panel()
+	_board.visible = false
+	_board.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(_board)
+	_board.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	_board.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_board.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_board.position.y -= 30.0  # sit above the hero panel
+	_board_text = RichTextLabel.new()
+	_board_text.bbcode_enabled = true
+	_board_text.fit_content = true
+	_board_text.scroll_active = false
+	_board_text.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_board_text.custom_minimum_size = Vector2(620, 0)
+	_board_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_board.add_child(_board_text)
+
+
+## Every hero's level, score, gold and items, grouped by team.
+func _refresh_board() -> void:
+	var me: Hero = match_node.my_hero()
+	var cell := "[cell padding=6,1,16,1][color=%s]%s[/color][/cell]"
+	var text := ""
+	if match_node.over:
+		text = "[center][font_size=34]%s[/font_size][/center]\n" % ("VICTORY" if match_node.winner == Net.my_team() else "DEFEAT")
+	text += "[table=8]"
+	for team in 2:
+		var rows := ""
+		var kills := 0
+		for u in match_node.units.get_children():
+			if not (u is Hero) or u.team != team:
+				continue
+			kills += u.kills
+			var who := str(Net.players.get(u.peer_id, {}).get("name", "Player"))
+			if u.dead:
+				who += "  (%d s)" % ceili(u.respawn_left)
+			var held := PackedStringArray()
+			for index: int in u.items:
+				held.append(_initials(Tune.ITEMS[index]["name"]))
+			var shade := "#ffe080" if u == me else ("#8a8f99" if u.dead else "#ffffff")
+			var purse := str(u.gold) if u.team == Net.my_team() else "-"  # enemy gold stays secret
+			for value in [who, u.def["name"], u.level, u.kills, u.deaths, u.cs, purse, " ".join(held)]:
+				rows += cell % [shade, value]
+		# Team heading, then the column titles, then one row per hero.
+		var tint := "#" + Tune.team_color(team).lightened(0.25).to_html(false)
+		text += "[cell padding=6,%d,16,1][font_size=20][color=%s]%s  -  %d kills[/color][/font_size][/cell]" % [
+			0 if team == 0 else 14, tint, Tune.team_name(team), kills]
+		for i in 7:
+			text += "[cell][/cell]"
+		for title in ["Player", "Hero", "Lv", "K", "D", "CS", "Gold", "Items"]:
+			text += cell % ["#9aa0ad", title]
+		text += rows
+	text += "[/table]"
+	if _board_text.text != text:
+		_board_text.text = text

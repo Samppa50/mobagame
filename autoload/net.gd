@@ -19,7 +19,7 @@ const LOBBY_COMPARISON_EQUAL := 0
 const LOBBY_DISTANCE_WORLDWIDE := 3
 const CHAT_ROOM_ENTER_SUCCESS := 1
 
-var players := {}        # peer_id -> { "name": String, "team": int, "ready": bool }
+var players := {}        # peer_id -> { "name", "team", "hero", "ready" }; bots have negative ids and "bot": true
 var dev_mode := false    # ENet localhost session
 var selftest := false
 var autostart := 0       # host auto-starts once this many players are present
@@ -28,6 +28,7 @@ var in_match := false
 var map_id := 0           # index into Tune.maps, chosen by the host in the lobby
 var match_node: Node = null
 var _joining_steam := false
+var _next_bot := -1      # host: id for the next bot (bots count down from -1)
 
 
 func _ready() -> void:
@@ -142,6 +143,7 @@ func _end(reason: String) -> void:
 func _become_host(peer: MultiplayerPeer) -> void:
 	multiplayer.multiplayer_peer = peer
 	players = {1: {"name": local_name(), "team": 0, "hero": 0, "ready": false}}
+	_next_bot = -1
 	in_match = false
 	session_started.emit()
 	roster_changed.emit()
@@ -224,9 +226,7 @@ func register(player_name: String) -> void:
 	if in_match or players.size() >= Tune.MAX_PLAYERS:
 		multiplayer.multiplayer_peer.disconnect_peer(id)
 		return
-	var counts := [0, 0]
-	for p in players.values():
-		counts[p["team"]] += 1
+	var counts := [team_count(0), team_count(1)]
 	var clean := player_name.strip_edges().left(24)
 	if clean == "":
 		clean = "Player"
@@ -246,7 +246,8 @@ func request_team(team: int) -> void:
 	var id := multiplayer.get_remote_sender_id()
 	if id == 0:
 		id = 1
-	if players.has(id) and (team == 0 or team == 1):
+	if players.has(id) and (team == 0 or team == 1) and players[id]["team"] != team \
+			and team_count(team) < Tune.TEAM_SIZE:
 		players[id]["team"] = team
 		set_roster.rpc(players)
 
@@ -256,6 +257,48 @@ func choose_team(team: int) -> void:
 		request_team(team)
 	else:
 		request_team.rpc_id(1, team)
+
+
+func team_count(team: int) -> int:
+	var count := 0
+	for p in players.values():
+		if p["team"] == team:
+			count += 1
+	return count
+
+
+# --- Bots ----------------------------------------------------------------------
+# A bot is a roster entry with a negative id and "bot": true. The host spawns
+# a hero for it like for any player and drives it with a BotBrain.
+
+## Host only: add a bot to a team, playing the hero that team has fewest of.
+func add_bot(team: int) -> void:
+	if not multiplayer.is_server() or in_match or (team != 0 and team != 1) \
+			or players.size() >= Tune.MAX_PLAYERS or team_count(team) >= Tune.TEAM_SIZE:
+		return
+	var used := []
+	used.resize(Tune.HEROES.size())
+	used.fill(0)
+	for p in players.values():
+		if p["team"] == team:
+			used[p["hero"]] += 1
+	var hero: int = used.find(used.min())
+	players[_next_bot] = {"name": "Bot %d" % -_next_bot, "team": team, "hero": hero, "ready": true, "bot": true}
+	_next_bot -= 1
+	set_roster.rpc(players)
+
+
+## Host only: remove the bot most recently added to a team.
+func remove_bot(team: int) -> void:
+	if not multiplayer.is_server() or in_match:
+		return
+	var newest := 0
+	for id: int in players:
+		if id < newest and players[id]["team"] == team:
+			newest = id
+	if newest < 0:
+		players.erase(newest)
+		set_roster.rpc(players)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -304,7 +347,7 @@ func start_match() -> void:
 	if not multiplayer.is_server() or in_match:
 		return
 	for p in players.values():
-		p["ready"] = false
+		p["ready"] = p.get("bot", false)  # bots have nothing to load
 	if lobby_id != 0:
 		Steam.setLobbyJoinable(lobby_id, false)
 	multiplayer.multiplayer_peer.refuse_new_connections = true

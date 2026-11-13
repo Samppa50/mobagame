@@ -1,6 +1,7 @@
 class_name Hero
 extends Unit
 ## Player hero. The owning player sends commands; the host executes them.
+## A bot's hero (negative peer_id) is ordered about by a BotBrain on the host instead.
 ## Stats and the Q/W kit come from Tune.HEROES (picked in the lobby).
 
 var def := {}
@@ -45,7 +46,8 @@ var _target: Unit = null
 var _voice: AudioStreamPlayer3D
 var _tag: Label3D         # name and level above the hero
 var _title := ""
-var _gold_frac := 0.0    # host: passive income not yet paid out as whole gold
+var _brain: BotBrain      # host: the AI playing this hero, when its player is a bot
+var _gold_frac := 0.0   # host: passive income not yet paid out as whole gold
 
 
 func _configure() -> void:
@@ -232,7 +234,8 @@ func add_xp(amount: float) -> void:
 ## Host: pay this hero, with a floating "+N" only its player sees.
 func earn(amount: int) -> void:
 	gold += amount
-	match_node().fx_gold.rpc_id(peer_id, position, amount)
+	if peer_id > 0:  # bots have no screen to show it on
+		match_node().fx_gold.rpc_id(peer_id, position, amount)
 
 
 ## 3D audio source for this player's voice (created on first use).
@@ -264,7 +267,12 @@ func _authorized() -> bool:
 
 @rpc("any_peer", "call_remote", "reliable")
 func cmd_buy(index: int) -> void:
-	if not _from_owner() or index < 0 or index >= Tune.ITEMS.size():
+	if _from_owner():
+		host_buy(index)
+
+
+func host_buy(index: int) -> void:
+	if index < 0 or index >= Tune.ITEMS.size():
 		return
 	var cost: int = Tune.ITEMS[index]["cost"]
 	if not can_shop() or gold < cost or items.size() >= Tune.ITEM_SLOTS:
@@ -289,25 +297,42 @@ func cmd_sell(slot: int) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func cmd_move(point: Vector3) -> void:
-	if not _authorized():
-		return
-	_target = null
-	_path = Tune.route(position, free_point(Tune.clamp_to_map(point)))
+	if _authorized():
+		host_move(point)
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func cmd_attack(unit_name: String) -> void:
-	if not _authorized():
-		return
-	var u = get_parent().get_node_or_null(unit_name)
-	if u is Unit and u.team != team and u.targetable():
-		_target = u
-		_path = []
+	if _authorized():
+		host_attack(get_parent().get_node_or_null(unit_name))
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func cmd_cast(slot: int, point: Vector3) -> void:
-	if not _authorized() or slot < 0 or slot > 1:
+	if _authorized():
+		host_cast(slot, point)
+
+
+# --- Orders (host side; reached through the commands above, or directly by a bot) ---
+
+func host_move(point: Vector3) -> void:
+	_target = null
+	_path = Tune.route(position, free_point(Tune.clamp_to_map(point)))
+
+
+func host_attack(u: Node) -> void:
+	if u is Unit and u.team != team and u.targetable() and u != _target:
+		_target = u
+		_path = []
+
+
+## Nothing left to do: not walking anywhere and not attacking anything.
+func idle() -> bool:
+	return _path.is_empty() and _target == null
+
+
+func host_cast(slot: int, point: Vector3) -> void:
+	if dead or slot < 0 or slot > 1:
 		return
 	if (cd_q if slot == 0 else cd_w) > 0.0:
 		return
@@ -359,6 +384,10 @@ func host_tick(delta: float) -> void:
 	if _gold_frac >= 1.0:
 		gold += int(_gold_frac)
 		_gold_frac -= int(_gold_frac)
+	if peer_id < 0:
+		if _brain == null:
+			_brain = BotBrain.new()
+		_brain.tick(self, delta)
 	if dead:
 		respawn_left -= delta
 		if respawn_left <= 0.0:

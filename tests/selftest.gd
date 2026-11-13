@@ -67,8 +67,63 @@ func run_kit(m: Node) -> void:
 	await _finish(tree)
 
 
+## Number of human clients in the session (bots have negative ids).
+func multiplayer_peers() -> int:
+	var count := 0
+	for id: int in Net.players:
+		if id > 1:
+			count += 1
+	return count
+
+
+## Host plus bots (--autostart=1 --bots=N): a sped-up match played by the bots.
+## The host's own hero stands idle at its fountain.
+func run_bots(m: Node) -> void:
+	var tree := m.get_tree()
+	Engine.time_scale = 8.0
+	var bots := []
+	await tree.create_timer(1.0).timeout
+	for u in m.units.get_children():
+		if u is Hero and u.peer_id < 0:
+			bots.append(u)
+	check("every bot has a hero", bots.size() == Net.players.size() - 1, "%d" % bots.size())
+	var lanes := {}
+	for stage in [60, 180, 420, 900]:
+		while m.clock < stage and not m.over and is_instance_valid(m) and m.is_inside_tree():
+			await tree.create_timer(2.0).timeout
+			for h: Hero in bots:
+				lanes[Vector2i(h.team, h._brain._lane)] = true
+		var towers := [0, 0]
+		for u in m.units.get_children():
+			if u.kind == "tower":
+				towers[u.team] += 1
+		print("SELFTEST bots at %d s: towers blue %d red %d, over=%s" % [m.clock, towers[0], towers[1], m.over])
+		for h: Hero in bots:
+			print("SELFTEST   %-7s %-9s lane %d  lvl %2d  %d/%d/%d  gold %4d  items %s  hp %d/%d%s" % [
+				Tune.team_name(h.team), h.def["name"], h._brain._lane, h.level, h.kills, h.deaths, h.cs,
+				h.gold, h.items, h.hp, h.max_hp, "  (dead)" if h.dead else ""])
+		if stage == 60:
+			var busy := true
+			var shopped := true
+			for h: Hero in bots:
+				busy = busy and (h.xp > 0.0 or h.level > 1)
+				shopped = shopped and not h.items.is_empty()
+			check("every bot has earned experience in the first minute", busy)
+			check("every bot has bought an item", shopped)
+			if bots.size() >= 6:
+				check("bots spread over every lane", lanes.size() == Tune.map()["lanes"].size() * 2, str(lanes.keys()))
+		if m.over:
+			break
+	check("the bots finish the match", m.over, "winner %d at %d s" % [m.winner, m.clock])
+	Engine.time_scale = 1.0
+	await _finish(tree)
+
+
 func run(m: Node) -> void:
 	var tree := m.get_tree()
+	if Net.players.size() > 1 and multiplayer_peers() == 0:
+		await run_bots(m)
+		return
 	if Net.players.size() == 1:
 		await run_kit(m)
 		return

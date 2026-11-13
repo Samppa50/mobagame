@@ -201,7 +201,7 @@ func hero_spawn_point(hero: Unit) -> Vector3:
 	# Lined up across the base, side by side.
 	var ahead := Tune.forward(hero.team)
 	var spawn: Vector3 = Tune.map()["spawns"][hero.team]
-	return Tune.clamp_to_map(spawn + Vector3(-ahead.z, 0, ahead.x) * (slot - 1) * 3.0)
+	return Tune.clamp_to_map(spawn + Vector3(-ahead.z, 0, ahead.x) * (slot - 2) * 3.0)
 
 
 func hero_for(peer: int) -> Hero:

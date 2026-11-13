@@ -39,7 +39,7 @@ func _on_match_starting() -> void:
 	Net.report_ready()
 
 
-## Dev flags, passed after "--":  --dev-host  --dev-join  --autostart=N  --selftest  --hero=N  --map=N
+## Dev flags, passed after "--":  --dev-host  --dev-join  --autostart=N  --selftest  --hero=N  --map=N  --bots=N
 ## Steam passes "+connect_lobby <id>" when the game is launched from an invite.
 func _handle_args() -> void:
 	var user := OS.get_cmdline_user_args()
@@ -52,6 +52,11 @@ func _handle_args() -> void:
 		Net.host_dev()
 	elif "--dev-join" in user:
 		Net.join_dev("127.0.0.1")
+	for arg in user:
+		if arg.begins_with("--bots=") and multiplayer.is_server() and Net.online():
+			# Fill up alternately, the team without the host first.
+			for i in int(arg.get_slice("=", 1)):
+				Net.add_bot(1 - i % 2)
 	for arg in user:
 		if arg.begins_with("--hero=") and Net.online():
 			Net.choose_hero(int(arg.get_slice("=", 1)))

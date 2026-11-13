@@ -2,7 +2,8 @@ extends Node
 ## Every balance and yell constant lives here, plus the map definitions and
 ## the walkability / routing helpers that read them.
 
-const MAX_PLAYERS := 6
+const TEAM_SIZE := 5
+const MAX_PLAYERS := TEAM_SIZE * 2   # humans and bots together
 const DEV_PORT := 24565
 const LOBBY_TAG := "yellmoba"
 
@@ -55,9 +56,11 @@ const FOG_MAX_EYES := 64
 ## Ability types: shot (line projectile), slam (damage around self),
 ## dash (leap to a point, damage on landing), blink (teleport),
 ## heal (restore allies around self). All damage and healing is yell-scaled.
+## "build" is the order in which a bot playing the hero buys items (Tune.ITEMS indices).
 const HEROES := [
 	{
 		"name": "Roarer", "role": "Ranged all-rounder", "shape": "caster",
+		"build": [0, 5, 4, 9, 2, 7],
 		"hp": 600.0, "speed": 7.0, "range": 6.5, "atk_cd": 0.8, "dmg": 50.0,
 		"accent": Color(1.0, 0.75, 0.2),
 		"q": {"name": "Sonic Bolt", "type": "shot", "cd": 5.0, "dmg": 110.0, "range": 14.0, "speed": 26.0, "radius": 0.9},
@@ -65,6 +68,7 @@ const HEROES := [
 	},
 	{
 		"name": "Bruiser", "role": "Melee tank", "shape": "tank",
+		"build": [0, 1, 7, 8, 2, 6],
 		"hp": 900.0, "speed": 7.5, "range": 2.2, "atk_cd": 0.7, "dmg": 60.0,
 		"accent": Color(0.75, 0.75, 0.8),
 		"q": {"name": "Leap", "type": "dash", "cd": 7.0, "dmg": 80.0, "range": 9.0, "radius": 2.8},
@@ -72,6 +76,7 @@ const HEROES := [
 	},
 	{
 		"name": "Longshot", "role": "Fragile sniper", "shape": "sniper",
+		"build": [1, 3, 8, 6, 2, 5],
 		"hp": 450.0, "speed": 6.5, "range": 9.5, "atk_cd": 1.1, "dmg": 65.0,
 		"accent": Color(0.6, 1.0, 0.5),
 		"q": {"name": "Piercing Cry", "type": "shot", "cd": 7.0, "dmg": 160.0, "range": 24.0, "speed": 42.0, "radius": 0.7},
@@ -79,6 +84,7 @@ const HEROES := [
 	},
 	{
 		"name": "Chanter", "role": "Healer", "shape": "healer",
+		"build": [0, 5, 4, 9, 7, 2],
 		"hp": 550.0, "speed": 7.0, "range": 6.0, "atk_cd": 0.9, "dmg": 40.0,
 		"accent": Color(0.5, 1.0, 0.9),
 		"q": {"name": "Hymn Bolt", "type": "shot", "cd": 5.0, "dmg": 90.0, "range": 13.0, "speed": 24.0, "radius": 0.9},
@@ -167,7 +173,7 @@ const MINION_DMG := 12.0
 const MINION_CD := 1.0
 const MINION_RANGE := 1.6
 const MINION_AGGRO := 7.0
-const TOWER_HP := 800.0
+const TOWER_HP := 1600.0
 const TOWER_RANGE := 9.0
 const TOWER_DMG := 45.0
 const TOWER_CD := 1.0

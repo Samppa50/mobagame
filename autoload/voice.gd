@@ -133,7 +133,7 @@ func _relay(speaker: int, chunk: PackedByteArray) -> void:
 	var m = Net.match_node if Net.in_match and is_instance_valid(Net.match_node) else null
 	var from_hero = m.hero_for(speaker) if m != null else null
 	for peer in Net.players:
-		if peer == speaker:
+		if peer == speaker or peer < 0:  # bots have no ears
 			continue
 		if m != null:
 			var to_hero = m.hero_for(peer)

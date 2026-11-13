@@ -2,6 +2,8 @@ extends Control
 ## Pre-match lobby: roster, team pick, mic check, start.
 
 var _teams := []      # two Labels
+var _joins := []      # "Join <team>" buttons
+var _bot_adds := []   # host only: "+ Add bot" buttons
 var _mic: ProgressBar
 var _mic_note: Label
 var _start: Button
@@ -37,8 +39,24 @@ func _ready() -> void:
 		join.modulate = Tune.team_color(team).lightened(0.4)
 		join.pressed.connect(Net.choose_team.bind(team))
 		col.add_child(join)
+		_joins.append(join)
+		if multiplayer.is_server():
+			var bots := HBoxContainer.new()
+			bots.add_theme_constant_override("separation", 6)
+			col.add_child(bots)
+			var add := Button.new()
+			add.text = "+ Add bot"
+			add.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			add.pressed.connect(Net.add_bot.bind(team))
+			bots.add_child(add)
+			_bot_adds.append(add)
+			var remove := Button.new()
+			remove.text = "- Remove bot"
+			remove.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			remove.pressed.connect(Net.remove_bot.bind(team))
+			bots.add_child(remove)
 		var list := Label.new()
-		list.custom_minimum_size = Vector2(0, 150)
+		list.custom_minimum_size = Vector2(0, 140)
 		col.add_child(list)
 		_teams.append(list)
 
@@ -115,8 +133,14 @@ func _refresh() -> void:
 	for id in Net.players:
 		var p: Dictionary = Net.players[id]
 		names[p["team"]] += "%s - %s%s%s\n" % [p["name"], Tune.hero_def(p.get("hero", 0))["name"], "  (host)" if id == 1 else "", "  <- you" if id == Net.my_id() else ""]
+	var mine_team := Net.my_team()
 	for team in 2:
 		_teams[team].text = names[team]
+		var full := Net.team_count(team) >= Tune.TEAM_SIZE
+		_joins[team].text = "Join %s  (%d/%d)" % [Tune.team_name(team), Net.team_count(team), Tune.TEAM_SIZE]
+		_joins[team].disabled = full or team == mine_team
+		if team < _bot_adds.size():
+			_bot_adds[team].disabled = full
 	_start.visible = multiplayer.is_server()
 	# Only the host can change the map; everyone sees which one is picked.
 	for i in _map_buttons.size():
